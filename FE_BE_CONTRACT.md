@@ -13,14 +13,14 @@
 # Yêu cầu: JDK 17 + MongoDB (port 27017) hoặc Docker compose mongo
 cd cartonloading_be
 ./gradlew bootRun           # Windows: gradlew.bat bootRun
-# BE chạy ở: http://localhost:8082
+# BE chạy ở: http://localhost:8083
 ```
 
 ### 0.2 Mở 3 tools thiết yếu
 | Tool | URL | Mục đích |
 |---|---|---|
-| **Swagger UI (OpenAPI)** | http://localhost:8082/swagger-ui/index.html | Xem tất cả endpoint, test trực tiếp, copy payload mẫu |
-| **OpenAPI JSON raw** | http://localhost:8082/v3/api-docs | Dùng để generate TypeScript SDK (xem mục 1.2) |
+| **Swagger UI (OpenAPI)** | http://localhost:8083/swagger-ui/index.html | Xem tất cả endpoint, test trực tiếp, copy payload mẫu |
+| **OpenAPI JSON raw** | http://localhost:8083/v3/api-docs | Dùng để generate TypeScript SDK (xem mục 1.2) |
 | **Postman Collection mẫu** | `docs/BSL_Carton_Loading_API.postman_collection.json` | Import vào Postman để chạy flow nhanh (có sample body) |
 
 ### 0.3 Tạo tài khoản admin (lần đầu)
@@ -33,7 +33,7 @@ Gọi `POST /api/auth/register` hoặc dùng seeding script ở mục 9.
 Toàn bộ BE tự sinh OpenAPI 3.0 spec bằng **springdoc-openapi v2**. FE **không được tự define interface** bằng tay → dùng công cụ auto-generate.
 
 ### 1.1 Endpoint / Method / Param lấy từ đâu?
-→ **Chỉ lấy từ** [Swagger UI](http://localhost:8082/swagger-ui/index.html).
+→ **Chỉ lấy từ** [Swagger UI](http://localhost:8083/swagger-ui/index.html).
 - Mỗi `@Operation` có summary, description, example request/response.
 - Các DTO đã gắn `@Schema(description=...)` cho từng field → hiểu đúng ý nghĩa (vd: `qtyPerCtn` là số PC mỗi thùng, không phải tổng số thùng).
 
@@ -42,7 +42,7 @@ Dùng **openapi-typescript-codegen** hoặc **Orval**:
 ```bash
 # Option 1: openapi-typescript-codegen (nhẹ)
 npm install -D openapi-typescript-codegen
-openapi --input http://localhost:8082/v3/api-docs --output ./src/api/generated --client axios
+openapi --input http://localhost:8083/v3/api-docs --output ./src/api/generated --client axios
 
 # Option 2: Orval (tốt hơn, có React Query hook)
 npm install -D orval
@@ -331,7 +331,7 @@ const total = Number(response.headers['x-total-count'] || response.data?.totalEl
 ### 6.1 Kết nối
 ```
 WS Endpoint (SockJS - dùng @stomp/stompjs client):
-  http://localhost:8082/ws-carton
+  http://localhost:8083/ws-carton
   Header khi connect: Authorization: Bearer <token>
 
 Subscribe topic:
@@ -490,7 +490,7 @@ Tự tạo ra:
 Dùng **Prism** + OpenAPI spec:
 ```bash
 npm install -g @stoplight/prism-cli
-prism mock http://localhost:8082/v3/api-docs -p 4010
+prism mock http://localhost:8083/v3/api-docs -p 4010
 # FE point baseUrl=http://localhost:4010 → Prism tự trả về example theo schema
 ```
 

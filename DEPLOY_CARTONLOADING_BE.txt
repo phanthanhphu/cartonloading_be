@@ -1,0 +1,21 @@
+CARTON LOADING BE
+
+Bước 1 - Tạo thư mục uploads
+mkdir -p /home/bsl-adminit/Projects/cartonloading/uploads
+
+Bước 2 - Vào thư mục BE
+cd /home/bsl-adminit/Projects/cartonloading/cartonloading_be
+
+Bước 3 - Build image
+docker build -t cartonloading_be:latest .
+
+Bước 4 - Xóa container cũ
+docker rm -f cartonloading_be 2>/dev/null || true
+
+Bước 5 - Chạy container BE mới
+docker run -d --name cartonloading_be --restart unless-stopped --network host -v "/home/bsl-adminit/Projects/cartonloading/uploads:/app/uploads" -e SPRING_DATA_MONGODB_URI="mongodb://127.0.0.1:27017/cartonloading" -e SERVER_ADDRESS="0.0.0.0" -e SERVER_PORT="8083" -e SERVER_SSL_ENABLED="false" cartonloading_be:latest
+
+Kiểm tra:
+docker logs -f --tail 200 cartonloading_be
+curl http://127.0.0.1:8083
+sudo ss -lntp | grep 8083
