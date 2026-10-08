@@ -1,10 +1,11 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
 import org.bsl.cartonloading.buyers.es.enums.CartonLifecycleStatus;
-import org.bsl.cartonloading.common.constants.FilterValue;
+import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.es.enums.InspectionResult;
 import org.bsl.cartonloading.buyers.es.enums.ShipmentStatus;
 import org.bsl.cartonloading.buyers.es.enums.WeightStatus;
@@ -53,9 +54,9 @@ public class ShipmentService {
     public String export(String buyer, String orderId, String keyword, String shipmentId, String lifecycle) {
         Query query = Query.query(cartonFilter(buyer, orderId, keyword, shipmentId, lifecycle));
         if (mongo.count(query, CartonScanTransaction.class) > 50000) {
-            throw new IllegalArgumentException("Report exceeds 50,000 cartons. Filter by Order or Shipment first.");
+            throw new IllegalArgumentException(AppMessages.REPORT_TOO_LARGE);
         }
-        StringBuilder csv = new StringBuilder("\uFEFFBarcode,Order,PO,Product,Style,Color,Size,Planned quantity,Assigned quantity,Production line,Lifecycle,Weight kg,Weight result,Manual result,Inspection note,Inspected by,Completed by,Shipment,Shipped at\r\n");
+        StringBuilder csv = new StringBuilder(AppConstants.Csv.SHIPMENT_REPORT_HEADER);
         for (CartonScanTransaction row : mongo.find(query.with(Sort.by("orderId", "orderCartonSequence")), CartonScanTransaction.class)) {
             Object[] values = {row.getFactoryBarcode(), row.getOrderName(), row.getPoNumber(), row.getArticleNumber(),
                     row.getStyle(), row.getColor(), row.getSize(), row.getCartonPcs(), row.getAssignedQuantity(),
@@ -78,7 +79,7 @@ public class ShipmentService {
         List<Criteria> filters = new ArrayList<>();
         filters.add(Criteria.where("buyerCode").is(buyer(buyer)));
         if (text(orderId) != null) filters.add(Criteria.where("orderId").is(orderId));
-        if (FilterValue.UNPLANNED.equals(shipmentId)) filters.add(Criteria.where("shipmentId").is(null));
+        if (AppConstants.Filter.UNPLANNED.equals(shipmentId)) filters.add(Criteria.where("shipmentId").is(null));
         else if (text(shipmentId) != null) filters.add(Criteria.where("shipmentId").is(shipmentId));
         if (text(keyword) != null) {
             Pattern p = Pattern.compile(Pattern.quote(keyword.trim()), Pattern.CASE_INSENSITIVE);
@@ -86,8 +87,8 @@ public class ShipmentService {
                     "style", "styleNumber", "color", "size", "shipmentNo", "cartonCode", "orderName"})
                     .map(field -> Criteria.where(field).regex(p)).toArray(Criteria[]::new)));
         }
-        String state = text(lifecycle) == null ? FilterValue.ALL : lifecycle.toUpperCase(Locale.ROOT);
-        if (!FilterValue.ALL.equals(state)) {
+        String state = text(lifecycle) == null ? AppConstants.Filter.ALL : lifecycle.toUpperCase(Locale.ROOT);
+        if (!AppConstants.Filter.ALL.equals(state)) {
             if (CartonLifecycleStatus.SHIPPED.name().equals(state)) filters.add(Criteria.where("shippedAt").ne(null));
             else {
                 filters.add(Criteria.where("shippedAt").is(null));
@@ -106,7 +107,7 @@ public class ShipmentService {
                             filters.add(CartonLifecycleStatus.CREATED.name().equals(state)
                                     ? new Criteria().orOperator(Criteria.where("factoryBarcode").is(null), Criteria.where("factoryBarcode").is(""))
                                     : Criteria.where("factoryBarcode").nin(null, ""));
-                        } else throw new IllegalArgumentException("Unsupported lifecycle: " + lifecycle);
+                        } else throw new IllegalArgumentException(AppMessages.unsupportedLifecycle(lifecycle));
                     }
                 }
             }
@@ -117,14 +118,14 @@ public class ShipmentService {
     public CartonScanTransaction inspect(String buyer, String cartonId, CartonInspectionRequest request) {
         CartonScanTransaction carton = carton(buyer, cartonId);
         requireOpen(carton);
-        if (text(carton.getFactoryBarcode()) == null) throw new IllegalArgumentException("Assign a Factory Barcode first.");
-        if (carton.getStatus() == CartonScanStatus.WAITING_WEIGHT) throw new IllegalArgumentException("Finish the pending weight job first.");
+        if (text(carton.getFactoryBarcode()) == null) throw new IllegalArgumentException(AppMessages.ASSIGN_FACTORY_BARCODE_FIRST);
+        if (carton.getStatus() == CartonScanStatus.WAITING_WEIGHT) throw new IllegalArgumentException(AppMessages.FINISH_PENDING_WEIGHT_JOB_FIRST);
         loading.requireCartonShipmentReady(carton);
         String result = required(request == null ? null : request.result(), "Inspection result").toUpperCase(Locale.ROOT);
-        if (!List.of(InspectionResult.PASS.name(), InspectionResult.FAIL.name()).contains(result)) throw new IllegalArgumentException("Result must be PASS or FAIL.");
+        if (!List.of(InspectionResult.PASS.name(), InspectionResult.FAIL.name()).contains(result)) throw new IllegalArgumentException(AppMessages.INSPECTION_RESULT_PASS_OR_FAIL);
         String note = required(request.note(), "Inspection note");
         if (InspectionResult.PASS.name().equals(result) && List.of(WeightStatus.UNDER.name(), WeightStatus.OVER.name()).contains(Objects.toString(carton.getWeightStatus(), ""))) {
-            throw new IllegalArgumentException("Weight failure cannot be overridden. Ask Admin to reset and recheck this carton.");
+            throw new IllegalArgumentException(AppMessages.WEIGHT_FAILURE_OVERRIDE_BLOCKED);
         }
         LocalDateTime now = LocalDateTime.now();
         Update update = new Update().set("manualInspectionResult", result).set("inspectionNote", note)
@@ -136,7 +137,7 @@ public class ShipmentService {
                 Criteria.where("inspectedAt").is(carton.getInspectedAt()), Criteria.where("weightKg").is(carton.getWeightKg()),
                 Criteria.where("factoryBarcode").is(carton.getFactoryBarcode()))), update, returning(), CartonScanTransaction.class);
         if (saved == null) throw changed();
-        log("MANUAL_INSPECTION", saved.getId(), result + ": " + note);
+        log(AppConstants.AuditAction.MANUAL_INSPECTION, saved.getId(), result + ": " + note);
         return saved;
     }
 
@@ -146,7 +147,7 @@ public class ShipmentService {
         requireOpen(carton);
         if (!CartonLifecycleStatus.CHECKED.name().equals(carton.getLifecycleStatus()) || !carton.isInspectionPassed()
                 || carton.getStatus() != CartonScanStatus.COMPLETED || text(carton.getFactoryBarcode()) == null) {
-            throw new IllegalArgumentException("Only an assigned carton with a PASS inspection can be completed. NO_STANDARD alone is not a pass.");
+            throw new IllegalArgumentException(AppMessages.ASSIGNED_PASS_REQUIRED_FOR_COMPLETION);
         }
         loading.requireCartonShipmentReady(carton);
         CartonScanTransaction saved = mongo.findAndModify(Query.query(new Criteria().andOperator(openCriteria(buyer, cartonId),
@@ -156,29 +157,29 @@ public class ShipmentService {
                 new Update().set("completedAt", LocalDateTime.now()).set("completedBy", RequestActor.current())
                         .set("updatedAt", LocalDateTime.now()), returning(), CartonScanTransaction.class);
         if (saved == null) throw changed();
-        log("CARTON_COMPLETED", cartonId, "Packing completion confirmed");
+        log(AppConstants.AuditAction.CARTON_COMPLETED, cartonId, AppMessages.PACKING_COMPLETION_CONFIRMED);
         return saved;
     }
 
     public Shipment create(String buyer, ShipmentRequest request) {
-        if (request == null) throw new IllegalArgumentException("Shipment request is required.");
+        if (request == null) throw new IllegalArgumentException(AppMessages.SHIPMENT_REQUEST_REQUIRED);
         String code = buyer(buyer);
         orders.getEntity(code, required(request.orderId(), "Order"));
         Shipment shipment = new Shipment();
         shipment.setId(UUID.randomUUID().toString()); shipment.setBuyerCode(code); shipment.setOrderId(request.orderId());
         shipment.setShipmentNo(required(request.shipmentNo(), "Shipment number"));
         shipment.setDestination(required(request.destination(), "Destination"));
-        if (request.plannedDate() == null) throw new IllegalArgumentException("Planned shipment date is required.");
+        if (request.plannedDate() == null) throw new IllegalArgumentException(AppMessages.PLANNED_SHIPMENT_DATE_REQUIRED);
         shipment.setPlannedDate(request.plannedDate()); shipment.setCarrier(text(request.carrier())); shipment.setReference(text(request.reference()));
         List<String> ids = request.cartonIds() == null ? List.of() : request.cartonIds().stream().filter(Objects::nonNull).distinct().toList();
-        if (ids.isEmpty() || ids.size() > 5000) throw new IllegalArgumentException("Select between 1 and 5,000 physical cartons.");
+        if (ids.isEmpty() || ids.size() > 5000) throw new IllegalArgumentException(AppMessages.SELECT_PHYSICAL_CARTONS_RANGE);
         shipment.setCartonIds(ids); shipment.setStatus(ShipmentStatus.PREPARING.name()); shipment.setCreatedBy(RequestActor.current()); shipment.setCreatedAt(LocalDateTime.now());
         mongo.insert(shipment);
         try {
             for (String id : ids) {
                 CartonScanTransaction candidate = mongo.findOne(Query.query(Criteria.where("_id").is(id)
                         .and("buyerCode").is(code).and("orderId").is(request.orderId())), CartonScanTransaction.class);
-                if (candidate == null) throw new IllegalArgumentException("Physical carton not found in the selected Order.");
+                if (candidate == null) throw new IllegalArgumentException(AppMessages.PHYSICAL_CARTON_NOT_FOUND_ORDER);
                 java.math.BigDecimal plannedQuantity = candidate.getCartonPcs() == null ? candidate.getQtyPerCarton() : candidate.getCartonPcs();
                 ShipmentWorkflowPolicy.requireQuantity(candidate.getAssignedQuantity(), plannedQuantity);
 
@@ -188,7 +189,7 @@ public class ShipmentService {
                         .and("factoryBarcode").exists(true).nin(null, "").and("assignedQuantity").gt(java.math.BigDecimal.ZERO)
                         .and("completedAt").is(null).and("weightKg").is(null).and("jobId").is(null)),
                         new Update().set("shipmentId", shipment.getId()).set("shipmentNo", shipment.getShipmentNo()), returning(), CartonScanTransaction.class);
-                if (claimed == null) throw new IllegalArgumentException("Select assigned, unweighed cartons with a confirmed quantity from the same Order. A carton may belong to only one shipment plan.");
+                if (claimed == null) throw new IllegalArgumentException(AppMessages.SHIPMENT_CARTON_SELECTION_INVALID);
             }
             shipment.setStatus(ShipmentStatus.PLANNED.name()); mongo.save(shipment);
         } catch (RuntimeException ex) {
@@ -197,7 +198,7 @@ public class ShipmentService {
             mongo.remove(Query.query(Criteria.where("_id").is(shipment.getId())), Shipment.class);
             throw ex;
         }
-        log("SHIPMENT_PLANNED", shipment.getId(), shipment.getShipmentNo());
+        log(AppConstants.AuditAction.SHIPMENT_PLANNED, shipment.getId(), shipment.getShipmentNo());
         return shipment;
     }
 
@@ -222,11 +223,11 @@ public class ShipmentService {
     public Shipment dispatch(String buyer, String id) {
         Shipment shipment = shipment(buyer, id);
         if (ShipmentStatus.SHIPPED.name().equals(shipment.getStatus())) return shipment;
-        if (!List.of(ShipmentStatus.PLANNED.name(), ShipmentStatus.DISPATCHING.name()).contains(shipment.getStatus())) throw new IllegalArgumentException("Shipment is not ready for dispatch.");
+        if (!List.of(ShipmentStatus.PLANNED.name(), ShipmentStatus.DISPATCHING.name()).contains(shipment.getStatus())) throw new IllegalArgumentException(AppMessages.SHIPMENT_NOT_READY_DISPATCH);
         List<CartonScanTransaction> cartons = shipmentCartons(shipment);
         if (cartons.size() != shipment.getCartonIds().size() || cartons.isEmpty()
                 || cartons.stream().anyMatch(c -> c.getCompletedAt() == null || !c.isInspectionPassed())) {
-            throw new IllegalArgumentException("Every planned carton must pass inspection and be explicitly completed before shipment.");
+            throw new IllegalArgumentException(AppMessages.SHIPMENT_CARTONS_MUST_PASS);
         }
         // Completed cartons are immutable. CAS claims shipment against a concurrent cancellation.
         if (ShipmentStatus.PLANNED.name().equals(shipment.getStatus())) {
@@ -239,7 +240,7 @@ public class ShipmentService {
         mongo.updateMulti(Query.query(Criteria.where("shipmentId").is(id).and("completedAt").ne(null).and("shippedAt").is(null)),
                 new Update().set("shippedAt", shipment.getShippedAt()).set("shippedBy", shipment.getShippedBy()), CartonScanTransaction.class);
         mongo.updateFirst(Query.query(Criteria.where("_id").is(id).and("status").is(ShipmentStatus.DISPATCHING.name())), new Update().set("status", ShipmentStatus.SHIPPED.name()), Shipment.class);
-        log("SHIPMENT_SHIPPED", id, shipment.getShipmentNo());
+        log(AppConstants.AuditAction.SHIPMENT_SHIPPED, id, shipment.getShipmentNo());
         return shipment(buyer, id);
     }
 
@@ -253,7 +254,7 @@ public class ShipmentService {
         }
         mongo.updateMulti(Query.query(Criteria.where("shipmentId").is(id).and("shippedAt").is(null)),
                 new Update().unset("shipmentId").unset("shipmentNo"), CartonScanTransaction.class);
-        log("SHIPMENT_CANCELLED", id, current.getShipmentNo());
+        log(AppConstants.AuditAction.SHIPMENT_CANCELLED, id, current.getShipmentNo());
     }
 
     private List<CartonScanTransaction> shipmentCartons(Shipment shipment) {
@@ -262,7 +263,7 @@ public class ShipmentService {
     }
     public Shipment shipment(String buyer, String id) {
         Shipment value = mongo.findOne(Query.query(Criteria.where("_id").is(id).and("buyerCode").is(buyer(buyer))), Shipment.class);
-        if (value == null) throw new IllegalArgumentException("Shipment not found for this Buyer.");
+        if (value == null) throw new IllegalArgumentException(AppMessages.SHIPMENT_NOT_FOUND_BUYER);
         return value;
     }
     private CartonScanTransaction carton(String buyer, String id) { return loading.get(buyer, id); }
@@ -272,19 +273,19 @@ public class ShipmentService {
     }
     private void requireOpen(CartonScanTransaction carton) {
         if (carton.getCompletedAt() != null || carton.getShippedAt() != null || carton.getStatus() == CartonScanStatus.CANCELLED)
-            throw new IllegalArgumentException("Completed, shipped or cancelled cartons cannot be changed.");
+            throw new IllegalArgumentException(AppMessages.LOCKED_CARTON_CHANGE);
     }
     private void log(String action, String id, String detail) {
-        audit.log(RequestActor.current(), action, "SHIPMENT_CARTON", id, detail, null, null);
+        audit.log(RequestActor.current(), action, AppConstants.AuditResource.SHIPMENT_CARTON, id, detail, null, null);
         events.cartonLoadingChanged(action, id);
     }
     private static FindAndModifyOptions returning() { return FindAndModifyOptions.options().returnNew(true); }
-    private static IllegalArgumentException changed() { return new IllegalArgumentException("Data changed. Refresh before retrying."); }
+    private static IllegalArgumentException changed() { return new IllegalArgumentException(AppMessages.DATA_CHANGED_REFRESH); }
     private static String buyer(String value) { return required(BuyerAccess.normalize(value), "Buyer"); }
     private static String text(String value) { return value == null || value.isBlank() ? null : value.trim(); }
     private static String required(String value, String field) {
-        String clean = text(value); if (clean == null) throw new IllegalArgumentException(field + " is required.");
-        if (clean.length() > 1000) throw new IllegalArgumentException(field + " is too long.");
+        String clean = text(value); if (clean == null) throw new IllegalArgumentException(AppMessages.required(field));
+        if (clean.length() > 1000) throw new IllegalArgumentException(AppMessages.tooLong(field));
         return clean;
     }
 }

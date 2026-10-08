@@ -1,7 +1,7 @@
 package org.bsl.cartonloading.buyers.es.controller;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.bsl.cartonloading.buyers.es.constants.WorkflowStage;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import org.bsl.cartonloading.buyers.es.dto.ShipmentRequest;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
@@ -13,24 +13,24 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 /** Stage 3: Sales publishes and cancels shipment plans. */
-@Tag(name = WorkflowStage.SALES_PLAN)
+@Tag(name = AppConstants.WorkflowStage.SALES_PLAN)
 @RestController
-@RequestMapping("/api/buyers/{buyer}/sales/shipments")
-@PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+@RequestMapping(AppConstants.ApiPath.BARCODE_WORKFLOW_SALES_SHIPMENTS)
+@PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
 public class SalesShipmentController {
     private final ShipmentService service;
     public SalesShipmentController(ShipmentService service) { this.service = service; }
 
     @GetMapping
     public Page<Map<String, Object>> list(@PathVariable String buyer,
-            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "25") int size) {
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.list(buyer, page, size);
     }
     @GetMapping("/cartons")
     public Page<CartonScanTransaction> cartons(@PathVariable String buyer,
             @RequestParam(required = false) String orderId, @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String shipmentId, @RequestParam(required = false) String lifecycle,
-            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "25") int size) {
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.cartons(buyer, orderId, keyword, shipmentId, lifecycle, page, size);
     }
     @PostMapping

@@ -37,7 +37,17 @@ public record PoManagementRow(
         Double grossWeightKg,
         LocalDate exFtyDate,
         List<String> allBpHeaders,
-        List<Map<String, String>> allBpRows
+        List<Map<String, String>> allBpRows,
+        int scannedQty,
+        int scannedCartons,
+        int scannedFullCartons,
+        int scannedRemainderQty,
+        int scannedRemainderCartons,
+        int identifiedQty,
+        int identifiedCartons,
+        int identifiedFullCartons,
+        int identifiedRemainderQty,
+        int identifiedRemainderCartons
 ) {
     public PoManagementRow(
             String key,
@@ -56,6 +66,8 @@ public record PoManagementRow(
                 cartonCount, itemCount,
                 null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null,
-                null, null);
+                null, null,
+                0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0);
     }
 }

@@ -2,6 +2,7 @@ package org.bsl.cartonloading.model;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -11,17 +12,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-@Document(collection = "users")
+@Document(collection = AppConstants.Collection.USERS)
 public class User {
-    public static final String ROLE_ADMIN = "ADMIN";
-    public static final String ROLE_USER = "USER";
 
-    public static final String ACCESS_SALES = "SALES";
-    public static final String ACCESS_VIEW_SYSTEM = "VIEW_SYSTEM";
-    public static final String ACCESS_ASSIGN_BARCODE = "ASSIGN_BARCODE";
-    public static final String ACCESS_WEIGHT_CHECK = "WEIGHT_CHECK";
-    public static final String ACCESS_BARCODE_OPERATOR = "BARCODE_OPERATOR";
-    public static final String ACCESS_PRINT_ROOM = "PRINT_ROOM";
 
     @Id
     private String id;
@@ -30,7 +23,7 @@ public class User {
     private String password;
     private String address;
     private String phone;
-    private String role = ROLE_USER;
+    private String role = AppConstants.Role.USER;
     private LocalDateTime createdAt;
     private String profileImageUrl;
     private boolean isEnabled;
@@ -54,21 +47,21 @@ public class User {
 
     public static String normalizeRole(String value) {
         if (value == null || value.trim().isEmpty()) {
-            return ROLE_USER;
+            return AppConstants.Role.USER;
         }
 
         String normalized = value.trim().toUpperCase(Locale.ROOT);
-        if ("ROLE_ADMIN".equals(normalized) || ROLE_ADMIN.equals(normalized) || "ADMINISTRATOR".equals(normalized)) {
-            return ROLE_ADMIN;
+        if ("ROLE_ADMIN".equals(normalized) || AppConstants.Role.ADMIN.equals(normalized) || "ADMINISTRATOR".equals(normalized)) {
+            return AppConstants.Role.ADMIN;
         }
 
         // Legacy LEADER accounts are intentionally migrated at read/write time to USER.
-        return ROLE_USER;
+        return AppConstants.Role.USER;
     }
 
     public static List<String> normalizeAccessPermissions(Collection<String> values, boolean admin) {
         if (admin) {
-            return List.of(ACCESS_SALES, ACCESS_ASSIGN_BARCODE, ACCESS_WEIGHT_CHECK, ACCESS_BARCODE_OPERATOR, ACCESS_PRINT_ROOM);
+            return List.of(AppConstants.Permission.SALES, AppConstants.Permission.ASSIGN_BARCODE, AppConstants.Permission.WEIGHT_CHECK, AppConstants.Permission.BARCODE_OPERATOR, AppConstants.Permission.PRINT_ROOM);
         }
 
         Set<String> normalized = new LinkedHashSet<>();
@@ -76,56 +69,56 @@ public class User {
             for (String value : values) {
                 if (value == null) continue;
                 String permission = value.trim().toUpperCase(Locale.ROOT);
-                if (ACCESS_SALES.equals(permission) || ACCESS_VIEW_SYSTEM.equals(permission)
-                        || ACCESS_ASSIGN_BARCODE.equals(permission) || ACCESS_WEIGHT_CHECK.equals(permission)
-                        || ACCESS_BARCODE_OPERATOR.equals(permission) || ACCESS_PRINT_ROOM.equals(permission)) {
+                if (AppConstants.Permission.SALES.equals(permission) || AppConstants.Permission.VIEW_SYSTEM.equals(permission)
+                        || AppConstants.Permission.ASSIGN_BARCODE.equals(permission) || AppConstants.Permission.WEIGHT_CHECK.equals(permission)
+                        || AppConstants.Permission.BARCODE_OPERATOR.equals(permission) || AppConstants.Permission.PRINT_ROOM.equals(permission)) {
                     normalized.add(permission);
                 }
             }
         }
 
         // Read-only access is never combined with a write permission.
-        if (normalized.contains(ACCESS_VIEW_SYSTEM)) {
-            return List.of(ACCESS_VIEW_SYSTEM);
+        if (normalized.contains(AppConstants.Permission.VIEW_SYSTEM)) {
+            return List.of(AppConstants.Permission.VIEW_SYSTEM);
         }
 
         // Existing users without an access list safely become view-only.
         if (normalized.isEmpty()) {
-            return List.of(ACCESS_VIEW_SYSTEM);
+            return List.of(AppConstants.Permission.VIEW_SYSTEM);
         }
 
         return new ArrayList<>(normalized);
     }
 
     public boolean isAdminRole() {
-        return ROLE_ADMIN.equals(normalizeRole(role));
+        return AppConstants.Role.ADMIN.equals(normalizeRole(role));
     }
 
 
     public boolean canManageSales() {
-        return isAdminRole() || getAccessPermissions().contains(ACCESS_SALES);
+        return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.SALES);
     }
 
     public boolean canAssignBarcode() {
-        return isAdminRole() || getAccessPermissions().contains(ACCESS_ASSIGN_BARCODE);
+        return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.ASSIGN_BARCODE);
     }
 
     public boolean canManageBarcodes() {
-        return canManageSales() || getAccessPermissions().contains(ACCESS_BARCODE_OPERATOR);
+        return canManageSales() || getAccessPermissions().contains(AppConstants.Permission.BARCODE_OPERATOR);
     }
 
     public boolean canWeightCheck() {
-        return isAdminRole() || getAccessPermissions().contains(ACCESS_WEIGHT_CHECK);
+        return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.WEIGHT_CHECK);
     }
 
     public boolean canPrintRoom() {
-        return isAdminRole() || getAccessPermissions().contains(ACCESS_PRINT_ROOM);
+        return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.PRINT_ROOM);
     }
 
     public boolean isViewOnly() {
         return !isAdminRole()
                 && getAccessPermissions().size() == 1
-                && getAccessPermissions().contains(ACCESS_VIEW_SYSTEM);
+                && getAccessPermissions().contains(AppConstants.Permission.VIEW_SYSTEM);
     }
 
     public List<String> getBuyerPermissions() {

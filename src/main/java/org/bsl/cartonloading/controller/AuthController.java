@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.controller;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
 import org.bsl.cartonloading.security.JwtUtil;
@@ -33,32 +34,32 @@ public class AuthController {
         String email = loginRequest.getEmail() == null ? "" : loginRequest.getEmail().trim();
         String password = loginRequest.getPassword();
         if (email.isEmpty() || password == null || password.isEmpty()) {
-            return ResponseEntity.status(401).body(Map.of("message", "Email or password is incorrect"));
+            return ResponseEntity.status(401).body(Map.of("message", AppMessages.INVALID_CREDENTIALS));
         }
 
         Optional<User> userOpt = userService.findByEmail(email);
         if (userOpt.isEmpty()) {
-            return ResponseEntity.status(401).body(Map.of("message", "Email or password is incorrect"));
+            return ResponseEntity.status(401).body(Map.of("message", AppMessages.INVALID_CREDENTIALS));
         }
 
         User user = userOpt.get();
         if (!user.isEnabled()) {
-            return ResponseEntity.status(403).body(Map.of("message", "Your account has been disabled. Please contact the administrator."));
+            return ResponseEntity.status(403).body(Map.of("message", AppMessages.ACCOUNT_DISABLED));
         }
         if (user.getPassword() == null || !passwordEncoder.matches(password, user.getPassword())) {
-            return ResponseEntity.status(401).body(Map.of("message", "Email or password is incorrect"));
+            return ResponseEntity.status(401).body(Map.of("message", AppMessages.INVALID_CREDENTIALS));
         }
 
         String selectedBuyer = BuyerAccess.normalize(loginRequest.getBuyerCode());
         if (selectedBuyer.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Please select a valid Buyer"));
+            return ResponseEntity.badRequest().body(Map.of("message", AppMessages.SELECT_VALID_BUYER));
         }
         if (!buyerService.existsActive(selectedBuyer)) {
-            return ResponseEntity.status(403).body(Map.of("message", "The selected Buyer is inactive or no longer exists"));
+            return ResponseEntity.status(403).body(Map.of("message", AppMessages.SELECTED_BUYER_INACTIVE));
         }
         if (!user.canAccessBuyer(selectedBuyer)) {
             return ResponseEntity.status(403)
-                    .body(Map.of("message", "Your account does not have permission to access the selected Buyer"));
+                    .body(Map.of("message", AppMessages.SELECTED_BUYER_ACCESS_DENIED));
         }
 
         String token = jwtUtil.generateToken(

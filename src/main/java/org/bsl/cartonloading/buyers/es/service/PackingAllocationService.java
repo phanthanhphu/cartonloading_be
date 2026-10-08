@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.service.RequestActor;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.Row;
@@ -39,8 +41,6 @@ import java.util.stream.Collectors;
 
 @Service
 public class PackingAllocationService {
-    private static final String MASTER_NAME = "PACKING_ALLOCATION";
-    private static final int BUSINESS_COLUMN_COUNT = 29;
 
     private final PackingAllocationLineRepository lineRepository;
     private final PackingOrderService orderService;
@@ -109,7 +109,7 @@ public class PackingAllocationService {
     public PackingAllocationLine get(String buyerCode, String orderId, String lineId) {
         PackingOrder order = orderService.getEntity(buyerCode, orderId);
         return lineRepository.findByIdAndOrderIdAndBuyerCode(lineId, order.getId(), order.getBuyerCode())
-                .orElseThrow(() -> new WorkflowNotFoundException("Packing allocation row not found"));
+                .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.PACKING_ALLOCATION_ROW_NOT_FOUND));
     }
 
     public PackingAllocationLine create(String buyerCode, String orderId, PackingAllocationRequest request) {
@@ -155,7 +155,7 @@ public class PackingAllocationService {
     public void delete(String buyerCode, String orderId, String lineId) {
         PackingOrder order = orderService.getEntity(buyerCode, orderId);
         if (cartonLoadingService.hasGeneratedPlan(buyerCode, orderId)) {
-            throw new WorkflowValidationException("Cannot delete Order Items after Carton Master generation.");
+            throw new WorkflowValidationException(AppMessages.DELETE_ORDER_ITEMS_AFTER_CARTON_MASTER_BLOCKED);
         }
         lineRepository.delete(get(buyerCode, orderId, lineId));
         orderService.touchFromMaster(order);
@@ -170,7 +170,7 @@ public class PackingAllocationService {
         PackingOrder order = orderService.getEntity(buyerCode, orderId);
         ImportMode effectiveMode = mode == null ? ImportMode.CREATE_ONLY : mode;
         if (cartonLoadingService.hasGeneratedPlan(buyerCode, orderId)) {
-            throw new WorkflowValidationException("Bulk import is locked after Carton Master generation. Edit individual rows before operations start, or create a new Order.");
+            throw new WorkflowValidationException(AppMessages.BULK_IMPORT_LOCKED_AFTER_CARTON_MASTER);
         }
         List<ImportRowError> errors = new ArrayList<>();
         List<RowCandidate> candidates = new ArrayList<>();
@@ -178,14 +178,14 @@ public class PackingAllocationService {
         boolean actionWorkbook = false;
 
         try (Workbook workbook = excelSupport.openWorkbook(file)) {
-            Sheet sheet = excelSupport.requiredSheet(workbook, "ALLOCATION");
+            Sheet sheet = excelSupport.requiredSheet(workbook, AppConstants.Excel.ALLOCATION_SHEET);
             FormulaEvaluator evaluator = excelSupport.evaluator(workbook);
             Row header = sheet.getRow(sheet.getFirstRowNum());
             actionWorkbook = header != null
                     && "ACTION".equals(TextNormalizer.headerKey(excelSupport.text(header, 0, evaluator)))
                     && "KEY".equals(TextNormalizer.headerKey(excelSupport.text(header, 1, evaluator)));
             int offset = actionWorkbook ? 2 : 0;
-            validateHeaders(sheet, evaluator, offset);
+            AllocationLayout layout = validateHeaders(sheet, evaluator, offset);
 
             Map<String, Integer> fileKeys = new HashMap<>();
             for (int rowIndex = sheet.getFirstRowNum() + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
@@ -194,36 +194,36 @@ public class PackingAllocationService {
                 try {
                     String rawAction = actionWorkbook ? clean(text(row, 0, evaluator)) : null;
                     String entityKey = actionWorkbook ? clean(text(row, 1, evaluator)) : null;
-                    boolean businessBlank = isBusinessBlank(row, offset, evaluator);
+                    boolean businessBlank = isBusinessBlank(row, layout, evaluator);
                     if (businessBlank && entityKey == null
-                            && (rawAction == null || "CREATE".equalsIgnoreCase(rawAction))) continue;
+                            && (rawAction == null || AppConstants.ExcelAction.CREATE.equalsIgnoreCase(rawAction))) continue;
 
                     totalRows++;
                     String action = actionWorkbook ? normalizeAction(rawAction) : null;
 
                     if (actionWorkbook) {
-                        if (action == null) throw new WorkflowValidationException("ACTION is required: CREATE, UPDATE or DELETE");
-                        if (("UPDATE".equals(action) || "DELETE".equals(action)) && entityKey == null) {
-                            throw new WorkflowValidationException("KEY is required for " + action);
+                        if (action == null) throw new WorkflowValidationException(AppMessages.ACTION_REQUIRED);
+                        if ((AppConstants.ExcelAction.UPDATE.equals(action) || AppConstants.ExcelAction.DELETE.equals(action)) && entityKey == null) {
+                            throw new WorkflowValidationException(AppMessages.keyRequiredFor(action));
                         }
                         if (entityKey != null) {
                             Integer previous = fileKeys.putIfAbsent(entityKey, excelRow);
-                            if (previous != null) throw new WorkflowValidationException("Duplicate KEY in file; first used at row " + previous);
+                            if (previous != null) throw new WorkflowValidationException(AppMessages.duplicateKeyFirstUsedAtRow(previous));
                         }
                         PackingAllocationRequest request = null;
-                        if (!"DELETE".equals(action)) {
-                            request = toRequest(row, evaluator, offset);
+                        if (!AppConstants.ExcelAction.DELETE.equals(action)) {
+                            request = toRequest(row, evaluator, layout);
                             validateBusinessRequired(request);
                         }
-                        if (!"CREATE".equals(action)) {
+                        if (!AppConstants.ExcelAction.CREATE.equals(action)) {
                             lineRepository.findByIdAndOrderIdAndBuyerCode(entityKey, order.getId(), order.getBuyerCode())
-                                    .orElseThrow(() -> new WorkflowValidationException("KEY does not belong to the selected Buyer/Order"));
+                                    .orElseThrow(() -> new WorkflowValidationException(AppMessages.KEY_NOT_SELECTED_BUYER_ORDER));
                         }
                         candidates.add(new RowCandidate(excelRow, action, entityKey, request));
                     } else {
-                        PackingAllocationRequest request = toRequest(row, evaluator, 0);
+                        PackingAllocationRequest request = toRequest(row, evaluator, layout);
                         validateBusinessRequired(request);
-                        candidates.add(new RowCandidate(excelRow, "LEGACY", null, request));
+                        candidates.add(new RowCandidate(excelRow, AppConstants.ExcelAction.LEGACY, null, request));
                     }
                 } catch (RuntimeException ex) {
                     errors.add(new ImportRowError(excelRow, "row", cleanMessage(ex)));
@@ -232,18 +232,18 @@ public class PackingAllocationService {
         } catch (ImportValidationException ex) {
             errors.add(new ImportRowError(1, "file", cleanMessage(ex)));
         } catch (Exception ex) {
-            errors.add(new ImportRowError(1, "file", "Cannot import ALLOCATION: " + cleanMessage(ex)));
+            errors.add(new ImportRowError(1, "file", AppMessages.cannotImportAllocation(cleanMessage(ex))));
         }
 
         if (candidates.isEmpty() && errors.isEmpty()) {
-            errors.add(new ImportRowError(1, "file", "Sheet ALLOCATION does not contain actionable data rows"));
+            errors.add(new ImportRowError(1, "file", AppMessages.ALLOCATION_IMPORT_EMPTY));
         }
         if (!errors.isEmpty()) {
-            return SpreadsheetImportResult.rejected(MASTER_NAME, effectiveMode, totalRows, errors);
+            return SpreadsheetImportResult.rejected(AppConstants.PackingImport.ALLOCATION_DATASET, effectiveMode, totalRows, errors);
         }
 
         SpreadsheetImportResult result = new SpreadsheetImportResult();
-        result.setDataset(MASTER_NAME);
+        result.setDataset(AppConstants.PackingImport.ALLOCATION_DATASET);
         result.setMode(effectiveMode);
         result.setApplied(true);
         result.setTotalRows(totalRows);
@@ -253,29 +253,29 @@ public class PackingAllocationService {
             int lineNo = nextLineNo(order);
             for (RowCandidate candidate : candidates) {
                 switch (candidate.action()) {
-                    case "CREATE" -> {
+                    case AppConstants.ExcelAction.CREATE -> {
                         PackingAllocationLine entity = newLine(order, candidate.request(), lineNo++);
                         lineRepository.save(entity);
                         result.setCreated(result.getCreated() + 1);
                     }
-                    case "UPDATE" -> {
+                    case AppConstants.ExcelAction.UPDATE -> {
                         PackingAllocationLine entity = lineRepository
                                 .findByIdAndOrderIdAndBuyerCode(candidate.entityKey(), order.getId(), order.getBuyerCode())
-                                .orElseThrow(() -> new WorkflowNotFoundException("Packing allocation row not found"));
+                                .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.PACKING_ALLOCATION_ROW_NOT_FOUND));
                         apply(entity, candidate.request());
                         entity.setUpdatedAt(LocalDateTime.now());
                         entity.setUpdatedBy(RequestActor.current());
                         lineRepository.save(entity);
                         result.setUpdated(result.getUpdated() + 1);
                     }
-                    case "DELETE" -> {
+                    case AppConstants.ExcelAction.DELETE -> {
                         PackingAllocationLine entity = lineRepository
                                 .findByIdAndOrderIdAndBuyerCode(candidate.entityKey(), order.getId(), order.getBuyerCode())
-                                .orElseThrow(() -> new WorkflowNotFoundException("Packing allocation row not found"));
+                                .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.PACKING_ALLOCATION_ROW_NOT_FOUND));
                         lineRepository.delete(entity);
                         result.setDeleted(result.getDeleted() + 1);
                     }
-                    default -> throw new IllegalStateException("Unsupported ACTION " + candidate.action());
+                    default -> throw new IllegalStateException(AppMessages.unsupportedAction(candidate.action()));
                 }
             }
         } else {
@@ -337,48 +337,61 @@ public class PackingAllocationService {
         return entity;
     }
 
-    private PackingAllocationRequest toRequest(Row row, FormulaEvaluator evaluator, int offset) {
+    private PackingAllocationRequest toRequest(Row row, FormulaEvaluator evaluator, AllocationLayout layout) {
         return new PackingAllocationRequest(
-                text(row, offset + 0, evaluator),
-                text(row, offset + 1, evaluator),
-                text(row, offset + 2, evaluator),
-                text(row, offset + 3, evaluator),
-                text(row, offset + 4, evaluator),
-                excelSupport.localDate(row, offset + 5, evaluator),
-                excelSupport.localDate(row, offset + 6, evaluator),
-                text(row, offset + 7, evaluator),
-                text(row, offset + 8, evaluator),
-                text(row, offset + 9, evaluator),
-                text(row, offset + 10, evaluator),
-                text(row, offset + 11, evaluator),
-                text(row, offset + 12, evaluator),
-                excelSupport.decimal(row, offset + 13, evaluator),
-                text(row, offset + 14, evaluator),
-                excelSupport.decimal(row, offset + 15, evaluator),
-                excelSupport.decimal(row, offset + 16, evaluator),
-                excelSupport.decimal(row, offset + 17, evaluator),
-                excelSupport.decimal(row, offset + 18, evaluator),
-                excelSupport.decimal(row, offset + 19, evaluator),
-                excelSupport.decimal(row, offset + 20, evaluator),
-                excelSupport.decimal(row, offset + 21, evaluator),
-                excelSupport.decimal(row, offset + 22, evaluator),
-                text(row, offset + 23, evaluator),
-                excelSupport.decimal(row, offset + 24, evaluator),
-                text(row, offset + 25, evaluator),
-                text(row, offset + 26, evaluator),
-                excelSupport.decimal(row, offset + 27, evaluator),
-                excelSupport.decimal(row, offset + 28, evaluator)
+                text(row, allocationColumn(layout, 0), evaluator),
+                text(row, allocationColumn(layout, 1), evaluator),
+                layout.productionFacilityPresent() ? text(row, allocationColumn(layout, 2), evaluator) : null,
+                text(row, allocationColumn(layout, 3), evaluator),
+                text(row, allocationColumn(layout, 4), evaluator),
+                excelSupport.localDate(row, allocationColumn(layout, 5), evaluator),
+                excelSupport.localDate(row, allocationColumn(layout, 6), evaluator),
+                text(row, allocationColumn(layout, 7), evaluator),
+                text(row, allocationColumn(layout, 8), evaluator),
+                text(row, allocationColumn(layout, 9), evaluator),
+                text(row, allocationColumn(layout, 10), evaluator),
+                text(row, allocationColumn(layout, 11), evaluator),
+                text(row, allocationColumn(layout, 12), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 13), evaluator),
+                text(row, allocationColumn(layout, 14), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 15), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 16), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 17), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 18), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 19), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 20), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 21), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 22), evaluator),
+                text(row, allocationColumn(layout, 23), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 24), evaluator),
+                text(row, allocationColumn(layout, 25), evaluator),
+                text(row, allocationColumn(layout, 26), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 27), evaluator),
+                excelSupport.decimal(row, allocationColumn(layout, 28), evaluator)
         );
     }
 
-    private void validateHeaders(Sheet sheet, FormulaEvaluator evaluator, int offset) {
+    private AllocationLayout validateHeaders(Sheet sheet, FormulaEvaluator evaluator, int offset) {
         Row header = sheet.getRow(sheet.getFirstRowNum());
-        if (header == null) throw new ImportValidationException("Sheet ALLOCATION does not have a header row");
+        if (header == null) throw new ImportValidationException(AppMessages.ALLOCATION_HEADER_NOT_FOUND);
+
+        String thirdBusinessHeader = TextNormalizer.headerKey(excelSupport.text(header, offset + 2, evaluator));
+        boolean productionFacilityPresent = thirdBusinessHeader.startsWith("PRODUCTIONFACILITY")
+                || thirdBusinessHeader.startsWith("FACTORY");
+        if (!productionFacilityPresent && !thirdBusinessHeader.startsWith("CONTAINER")) {
+            throw new ImportValidationException(
+                    AppMessages.invalidAllocationHeader(
+                            excelSupport.excelColumn(offset + 2),
+                            excelSupport.text(header, offset + 2, evaluator)
+                    )
+            );
+        }
+        AllocationLayout layout = new AllocationLayout(offset, productionFacilityPresent);
 
         Map<Integer, String[]> expected = new HashMap<>();
         expected.put(0, new String[]{"SUPPLIERNAME"});
         expected.put(1, new String[]{"ESSUPPLIER"});
-        expected.put(2, new String[]{"PRODUCTIONFACILITY"});
+        expected.put(2, new String[]{"PRODUCTIONFACILITY", "FACTORY"});
         expected.put(3, new String[]{"CONTAINER"});
         expected.put(4, new String[]{"MODEOFSHIPMENT"});
         expected.put(5, new String[]{"ETD"});
@@ -407,7 +420,8 @@ public class PackingAllocationService {
         expected.put(28, new String[]{"CBMCTN"});
 
         for (Map.Entry<Integer, String[]> entry : expected.entrySet()) {
-            int column = offset + entry.getKey();
+            if (entry.getKey() == 2 && !productionFacilityPresent) continue;
+            int column = allocationColumn(layout, entry.getKey());
             String actual = TextNormalizer.headerKey(excelSupport.text(header, column, evaluator));
             boolean matched = false;
             for (String prefix : entry.getValue()) {
@@ -418,11 +432,21 @@ public class PackingAllocationService {
             }
             if (!matched) {
                 throw new ImportValidationException(
-                        "Invalid ALLOCATION header at column " + excelSupport.excelColumn(column)
-                                + ". Received '" + excelSupport.text(header, column, evaluator) + "'"
+                        AppMessages.invalidAllocationHeader(
+                                excelSupport.excelColumn(column),
+                                excelSupport.text(header, column, evaluator)
+                        )
                 );
             }
         }
+        return layout;
+    }
+
+    private int allocationColumn(AllocationLayout layout, int logicalIndex) {
+        if (!layout.productionFacilityPresent() && logicalIndex > 2) {
+            return layout.offset() + logicalIndex - 1;
+        }
+        return layout.offset() + logicalIndex;
     }
 
     private boolean masterPhysicalPlanChanged(PackingAllocationLine current, PackingAllocationRequest next) {
@@ -456,15 +480,15 @@ public class PackingAllocationService {
     }
 
     private void validateBusinessRequired(PackingAllocationRequest request) {
-        required(request.poNumber(), "e.s. PO # is required");
-        required(request.articleNumber(), "e.s. Article # is required");
-        required(request.styleNumber(), "STYLE# is required");
-        required(request.style(), "STYLE is required");
-        required(request.color(), "Color is required");
-        required(request.size(), "Size is required");
-        requiredNumber(request.qtyPerCarton(), "Qty Per Ctn is required");
-        requiredNumber(request.totalPcs(), "Total pcs is required");
-        requiredNumber(request.totalCartons(), "Total ctns is required");
+        required(request.poNumber(), AppMessages.ES_PO_REQUIRED);
+        required(request.articleNumber(), AppMessages.ES_ARTICLE_REQUIRED);
+        required(request.styleNumber(), AppMessages.STYLE_UPPER_HASH_REQUIRED);
+        required(request.style(), AppMessages.STYLE_UPPER_REQUIRED);
+        required(request.color(), AppMessages.COLOR_REQUIRED);
+        required(request.size(), AppMessages.SIZE_REQUIRED);
+        requiredNumber(request.qtyPerCarton(), AppMessages.QTY_PER_CTN_REQUIRED);
+        requiredNumber(request.totalPcs(), AppMessages.TOTAL_PCS_LOWER_REQUIRED);
+        requiredNumber(request.totalCartons(), AppMessages.TOTAL_CTNS_REQUIRED);
     }
 
     private void apply(PackingAllocationLine entity, PackingAllocationRequest request) {
@@ -582,7 +606,7 @@ public class PackingAllocationService {
 
     private String cleanMessage(Throwable ex) {
         String message = ex == null ? null : ex.getMessage();
-        return message == null || message.isBlank() ? "Invalid data" : message;
+        return message == null || message.isBlank() ? AppMessages.INVALID_DATA : message;
     }
 
     private String normalizeAction(String value) {
@@ -590,18 +614,21 @@ public class PackingAllocationService {
         if (action == null) return null;
         action = action.toUpperCase(Locale.ROOT);
         return switch (action) {
-            case "CREATE", "UPDATE", "DELETE" -> action;
-            default -> throw new WorkflowValidationException("Invalid ACTION '" + value + "'. Use CREATE, UPDATE or DELETE");
+            case AppConstants.ExcelAction.CREATE, AppConstants.ExcelAction.UPDATE, AppConstants.ExcelAction.DELETE -> action;
+            default -> throw new WorkflowValidationException(AppMessages.invalidAction(value));
         };
     }
 
-    private boolean isBusinessBlank(Row row, int offset, FormulaEvaluator evaluator) {
+    private boolean isBusinessBlank(Row row, AllocationLayout layout, FormulaEvaluator evaluator) {
         if (row == null) return true;
-        for (int i = 0; i < BUSINESS_COLUMN_COUNT; i++) {
-            if (clean(excelSupport.text(row, offset + i, evaluator)) != null) return false;
+        for (int i = 0; i < AppConstants.PackingImport.ALLOCATION_BUSINESS_COLUMN_COUNT; i++) {
+            if (i == 2 && !layout.productionFacilityPresent()) continue;
+            if (clean(excelSupport.text(row, allocationColumn(layout, i), evaluator)) != null) return false;
         }
         return true;
     }
+
+    private record AllocationLayout(int offset, boolean productionFacilityPresent) { }
 
     private record RowCandidate(int excelRow, String action, String entityKey, PackingAllocationRequest request) {
     }

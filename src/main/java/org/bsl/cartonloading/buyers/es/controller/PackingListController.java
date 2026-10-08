@@ -1,7 +1,8 @@
 package org.bsl.cartonloading.buyers.es.controller;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.bsl.cartonloading.buyers.es.constants.WorkflowStage;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import jakarta.validation.Valid;
 import org.bsl.cartonloading.common.importing.ImportMode;
@@ -38,15 +39,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
 
-@Tag(name = WorkflowStage.SALES_MASTER)
+@Tag(name = AppConstants.WorkflowStage.SALES_MASTER)
 @RestController
 @Validated
-@RequestMapping({"/api/buyers/{buyer}/orders", "/api/buyers/{buyer}/packing-orders"})
+@RequestMapping({AppConstants.ApiPath.BARCODE_WORKFLOW_ORDERS, AppConstants.ApiPath.BARCODE_WORKFLOW_PACKING_ORDERS})
 public class PackingListController {
-    private static final MediaType XLSX = MediaType.parseMediaType(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-
     private final PackingOrderService orderService;
     private final PackingAllocationService masterService;
     private final PackingListLineService packingService;
@@ -64,7 +61,7 @@ public class PackingListController {
         this.exportService = exportService;
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping
     public Page<PackingOrderResponse> listOrders(
             @PathVariable String buyer,
@@ -76,21 +73,21 @@ public class PackingListController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String assignmentStatus,
             @RequestParam(required = false) Boolean completed,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size
     ) {
         return orderService.list(
                 requiredBuyer(buyer), keyword, orderDate, orderName, createdBy, status, assignmentStatus, completed, page, size
         );
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping("/{orderId}")
     public PackingOrderResponse getOrder(@PathVariable String buyer, @PathVariable String orderId) {
         return orderService.getResponse(requiredBuyer(buyer), orderId);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PostMapping
     public ResponseEntity<PackingOrderResponse> createOrder(
             @PathVariable String buyer,
@@ -99,7 +96,7 @@ public class PackingListController {
         return ResponseEntity.ok(orderService.create(requiredBuyer(buyer), request));
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PutMapping("/{orderId}")
     public PackingOrderResponse updateOrder(
             @PathVariable String buyer,
@@ -109,7 +106,7 @@ public class PackingListController {
         return orderService.update(requiredBuyer(buyer), orderId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @DeleteMapping("/{orderId}")
     public ResponseEntity<Void> deleteOrder(@PathVariable String buyer, @PathVariable String orderId) {
         orderService.delete(requiredBuyer(buyer), orderId);
@@ -118,7 +115,7 @@ public class PackingListController {
 
     /* Order Items (ALLOCATION) */
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping({"/{orderId}/master-lines", "/{orderId}/allocation-lines"})
     public Page<PackingAllocationLine> listMasterLines(
             @PathVariable String buyer,
@@ -131,8 +128,8 @@ public class PackingListController {
             @RequestParam(required = false) String sizeValue,
             @RequestParam(required = false) String shipmentMode,
             @RequestParam(required = false) String status,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.LARGE_PAGE_SIZE) int size
     ) {
         return masterService.list(
                 requiredBuyer(buyer), orderId, keyword, poNumber, articleNumber, styleNumber,
@@ -140,7 +137,7 @@ public class PackingListController {
         );
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping({"/{orderId}/master-lines/{lineId}", "/{orderId}/allocation-lines/{lineId}"})
     public PackingAllocationLine getMasterLine(
             @PathVariable String buyer,
@@ -150,7 +147,7 @@ public class PackingListController {
         return masterService.get(requiredBuyer(buyer), orderId, lineId);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PostMapping({"/{orderId}/master-lines", "/{orderId}/allocation-lines"})
     public ResponseEntity<PackingAllocationLine> createMasterLine(
             @PathVariable String buyer,
@@ -160,7 +157,7 @@ public class PackingListController {
         return ResponseEntity.ok(masterService.create(requiredBuyer(buyer), orderId, request));
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PutMapping({"/{orderId}/master-lines/{lineId}", "/{orderId}/allocation-lines/{lineId}"})
     public PackingAllocationLine updateMasterLine(
             @PathVariable String buyer,
@@ -171,7 +168,7 @@ public class PackingListController {
         return masterService.update(requiredBuyer(buyer), orderId, lineId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @DeleteMapping({"/{orderId}/master-lines/{lineId}", "/{orderId}/allocation-lines/{lineId}"})
     public ResponseEntity<Void> deleteMasterLine(
             @PathVariable String buyer,
@@ -182,28 +179,28 @@ public class PackingListController {
         return ResponseEntity.noContent().build();
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PostMapping(value = {"/{orderId}/master-lines/import", "/{orderId}/allocation-lines/import"}, consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<SpreadsheetImportResult> importMasterLines(
             @PathVariable String buyer,
             @PathVariable String orderId,
             @RequestParam("file") MultipartFile file,
-            @RequestParam(defaultValue = "CREATE_ONLY") ImportMode mode
+            @RequestParam(defaultValue = AppConstants.RequestDefault.CREATE_ONLY) ImportMode mode
     ) {
         SpreadsheetImportResult result = masterService.upload(requiredBuyer(buyer), orderId, file, mode);
         return result.isApplied() ? ResponseEntity.ok(result) : ResponseEntity.badRequest().body(result);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping("/{orderId}/master-lines/export")
     public ResponseEntity<byte[]> exportMaster(@PathVariable String buyer, @PathVariable String orderId) {
         byte[] content = exportService.exportMaster(requiredBuyer(buyer), orderId);
-        return download(content, "ORDER_MASTER_" + orderId + ".xlsx");
+        return download(content, "ORDER_MASTER_" + orderId + AppConstants.Importing.EXCEL_EXTENSION_XLSX);
     }
 
     /* Packing List inside the Order */
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping("/{orderId}/packing-lines")
     public Page<PackingListLine> listPackingLines(
             @PathVariable String buyer,
@@ -214,14 +211,14 @@ public class PackingListController {
             @RequestParam(required = false) String styleNumber,
             @RequestParam(required = false) String color,
             @RequestParam(required = false) String sizeValue,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.LARGE_PAGE_SIZE) int size
     ) {
         return packingService.list(requiredBuyer(buyer), orderId, keyword, poNumber, articleNumber,
                 styleNumber, color, sizeValue, page, size);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PostMapping("/{orderId}/packing-lines")
     public ResponseEntity<PackingListLine> createPackingLine(
             @PathVariable String buyer,
@@ -231,7 +228,7 @@ public class PackingListController {
         return ResponseEntity.ok(packingService.create(requiredBuyer(buyer), orderId, request));
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PutMapping("/{orderId}/packing-lines/{lineId}")
     public PackingListLine updatePackingLine(
             @PathVariable String buyer,
@@ -242,7 +239,7 @@ public class PackingListController {
         return packingService.update(requiredBuyer(buyer), orderId, lineId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @DeleteMapping("/{orderId}/packing-lines/{lineId}")
     public ResponseEntity<Void> deletePackingLine(
             @PathVariable String buyer,
@@ -253,46 +250,46 @@ public class PackingListController {
         return ResponseEntity.noContent().build();
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PostMapping("/{orderId}/packing-lines/generate")
     public PackingListGenerationResult generatePackingList(
             @PathVariable String buyer,
             @PathVariable String orderId,
-            @RequestParam(defaultValue = "true") boolean replace
+            @RequestParam(defaultValue = AppConstants.RequestDefault.TRUE) boolean replace
     ) {
         return packingService.generateFromMaster(requiredBuyer(buyer), orderId, replace);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PostMapping(value = "/{orderId}/packing-lines/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<SpreadsheetImportResult> importPackingLines(
             @PathVariable String buyer,
             @PathVariable String orderId,
             @RequestParam("file") MultipartFile file,
-            @RequestParam(defaultValue = "CREATE_ONLY") ImportMode mode
+            @RequestParam(defaultValue = AppConstants.RequestDefault.CREATE_ONLY) ImportMode mode
     ) {
         SpreadsheetImportResult result = packingService.upload(requiredBuyer(buyer), orderId, file, mode);
         return result.isApplied() ? ResponseEntity.ok(result) : ResponseEntity.badRequest().body(result);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping("/{orderId}/packing-lines/export")
     public ResponseEntity<byte[]> exportPackingList(@PathVariable String buyer, @PathVariable String orderId) {
         byte[] content = exportService.exportPackingList(requiredBuyer(buyer), orderId);
-        return download(content, "PACKING_LIST_" + orderId + ".xlsx");
+        return download(content, "PACKING_LIST_" + orderId + AppConstants.Importing.EXCEL_EXTENSION_XLSX);
     }
 
     private ResponseEntity<byte[]> download(byte[] content, String filename) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                .contentType(XLSX)
+                .contentType(MediaType.parseMediaType(AppConstants.MimeType.XLSX))
                 .contentLength(content.length)
                 .body(content);
     }
 
     private String requiredBuyer(String value) {
         String normalized = BuyerAccess.normalize(value);
-        if (normalized.isEmpty()) throw new IllegalArgumentException("Unsupported Buyer: " + value);
+        if (normalized.isEmpty()) throw new IllegalArgumentException(AppMessages.unsupportedBuyer(value));
         return normalized;
     }
 }

@@ -1,7 +1,8 @@
 package org.bsl.cartonloading.buyers.es.controller;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.bsl.cartonloading.buyers.es.constants.WorkflowStage;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.util.Map;
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodeScanRequest;
@@ -17,10 +18,10 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 /** Stage 4: Packing works inside one Sales shipment plan. */
-@Tag(name = WorkflowStage.PACKING_WEIGHT)
+@Tag(name = AppConstants.WorkflowStage.PACKING_WEIGHT)
 @RestController
-@RequestMapping("/api/buyers/{buyer}/packing/shipments")
-@PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+@RequestMapping(AppConstants.ApiPath.BARCODE_WORKFLOW_PACKING_SHIPMENTS)
+@PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
 public class PackingShipmentController {
     private final ShipmentService shipments;
     private final CartonLoadingService loading;
@@ -30,7 +31,7 @@ public class PackingShipmentController {
     }
     @GetMapping
     public Page<Map<String, Object>> inbox(@PathVariable String buyer,
-            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "25") int size) {
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return shipments.list(buyer, page, size);
     }
     @GetMapping("/{id}")
@@ -39,7 +40,7 @@ public class PackingShipmentController {
     @GetMapping("/{id}/cartons")
     public Page<CartonScanTransaction> cartons(@PathVariable String buyer, @PathVariable String id,
             @RequestParam(required = false) String keyword,
-            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "25") int size) {
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         Shipment plan = shipments.shipment(buyer, id);
         return shipments.cartons(buyer, plan.getOrderId(), keyword, id, null, page, size);
     }
@@ -49,14 +50,14 @@ public class PackingShipmentController {
         Shipment plan = shipments.shipment(buyer, id);
         if (request == null || request.stationCode() == null || request.stationCode().isBlank()
                 || Boolean.TRUE.equals(request.manualMode()) || request.factoryBarcode() == null) {
-            throw new IllegalArgumentException("Select a PLC station and scan the assigned Factory Barcode.");
+            throw new IllegalArgumentException(AppMessages.SELECT_PLC_AND_SCAN);
         }
         String barcode = request.factoryBarcode().trim();
         CartonScanTransaction carton = mongo.findOne(Query.query(Criteria.where("buyerCode").is(plan.getBuyerCode())
                 .and("orderId").is(plan.getOrderId()).and("shipmentId").is(id).and("factoryBarcode").is(barcode)),
                 CartonScanTransaction.class);
         if (carton == null || !plan.getCartonIds().contains(carton.getId())) {
-            throw new IllegalArgumentException("This barcode is not a carton in the selected shipment plan.");
+            throw new IllegalArgumentException(AppMessages.BARCODE_NOT_IN_SHIPMENT);
         }
         return loading.scanAssignedFactoryBarcode(plan.getBuyerCode(), plan.getOrderId(),
                 new FactoryBarcodeScanRequest(request.stationCode(), barcode, request.palletCode(), request.scanId(), false));
@@ -66,7 +67,7 @@ public class PackingShipmentController {
         Shipment plan = shipments.shipment(buyer, id);
         CartonScanTransaction carton = loading.get(buyer, cartonId);
         if (!id.equals(carton.getShipmentId()) || !plan.getCartonIds().contains(cartonId)) {
-            throw new IllegalArgumentException("Carton does not belong to the selected shipment.");
+            throw new IllegalArgumentException(AppMessages.CARTON_NOT_IN_SHIPMENT);
         }
         return shipments.complete(buyer, cartonId);
     }

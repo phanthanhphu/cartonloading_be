@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.controller;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import jakarta.validation.Valid;
 import org.bsl.cartonloading.dto.UserDTO;
 import org.bsl.cartonloading.dto.admin.PasswordResetRequest;
@@ -27,8 +29,8 @@ public class UserController {
                               @RequestParam(required = false) String role,
                               @RequestParam(required = false) String departmentId,
                               @RequestParam(required = false) Boolean enabled,
-                              @RequestParam(defaultValue = "0") int page,
-                              @RequestParam(defaultValue = "25") int size) {
+                              @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+                              @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.list(username, email, phone, address, role, departmentId, enabled, page, size);
     }
 

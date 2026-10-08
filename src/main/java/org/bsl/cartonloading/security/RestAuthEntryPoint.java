@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.security;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -31,7 +33,7 @@ public class RestAuthEntryPoint implements AuthenticationEntryPoint {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", false);
         body.put("status", 401);
-        body.put("message", "Authentication is required. Please login again.");
+        body.put("message", AppMessages.AUTHENTICATION_REQUIRED_LOGIN_AGAIN);
         body.put("path", request.getRequestURI());
         body.put("timestamp", System.currentTimeMillis());
 

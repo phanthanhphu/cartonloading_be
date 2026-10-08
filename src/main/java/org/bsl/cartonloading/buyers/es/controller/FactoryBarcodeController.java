@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.es.controller;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodeGenerateRequest;
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodeGenerateResponse;
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodePrintRequest;
@@ -14,8 +16,8 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/buyers/engelbert-strauss/factory-barcodes")
-@PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS')")
+@RequestMapping(AppConstants.ApiPath.BARCODE_WORKFLOW_FACTORY_BARCODES)
+@PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_ACCESS)
 public class FactoryBarcodeController {
     private final FactoryBarcodeService service;
 
@@ -23,26 +25,26 @@ public class FactoryBarcodeController {
         this.service = service;
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.canManageBarcodes())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_MANAGE_BARCODES)
     @PostMapping("/generate")
     public FactoryBarcodeGenerateResponse generate(@RequestBody FactoryBarcodeGenerateRequest request) {
         return service.generate(request);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.canManageBarcodes())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_MANAGE_BARCODES)
     @GetMapping
     public Page<FactoryBarcode> list(
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String factoryCode,
             @RequestParam(required = false) Integer year,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.LARGE_PAGE_SIZE) int size
     ) {
         return service.list(keyword, status, factoryCode, year, page, size);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.canManageBarcodes())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_MANAGE_BARCODES)
     @GetMapping("/sequence")
     public FactoryBarcodeSequenceResponse sequence(
             @RequestParam Integer year,
@@ -51,19 +53,19 @@ public class FactoryBarcodeController {
         return service.sequence(year, factoryCode);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.canManageBarcodes())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_MANAGE_BARCODES)
     @GetMapping("/{barcode}")
     public FactoryBarcode get(@PathVariable String barcode) {
         return service.get(barcode);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.canManageBarcodes())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_MANAGE_BARCODES)
     @PostMapping("/mark-printed")
     public List<FactoryBarcode> markPrinted(@RequestBody FactoryBarcodePrintRequest request) {
         return service.markPrinted(request == null ? null : request.barcodes());
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.canManageBarcodes())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_MANAGE_BARCODES)
     @PostMapping("/{barcode}/void")
     public FactoryBarcode voidBarcode(
             @PathVariable String barcode,

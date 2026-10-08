@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.controller;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import jakarta.validation.Valid;
 import org.bsl.cartonloading.dto.admin.BuyerAdminRequest;
 import org.bsl.cartonloading.model.Buyer;
@@ -25,8 +27,8 @@ public class BuyerController {
             @RequestParam(required = false) String buyerName,
             @RequestParam(required = false) String description,
             @RequestParam(required = false) Boolean active,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size) { return service.list(buyerKey, buyerName, description, active, page, size); }
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) { return service.list(buyerKey, buyerName, description, active, page, size); }
 
     @PreAuthorize("@accessControl.isAdmin()")
     @PostMapping public Buyer create(@Valid @RequestBody BuyerAdminRequest request) { return service.create(request); }

@@ -6,12 +6,13 @@ import lombok.NoArgsConstructor;
 import org.bsl.cartonloading.buyers.es.enums.FactoryBarcodeStatus;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
-@Document(collection = "factory_barcodes")
+@Document(collection = AppConstants.Collection.FACTORY_BARCODES)
 public class FactoryBarcode {
     @Id
     private String id;

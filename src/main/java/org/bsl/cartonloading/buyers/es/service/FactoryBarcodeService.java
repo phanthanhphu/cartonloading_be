@@ -1,7 +1,8 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.service.RequestActor;
-import org.bsl.cartonloading.common.constants.FilterValue;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodeGenerateRequest;
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodeGenerateResponse;
@@ -32,8 +33,6 @@ import java.util.Locale;
 
 @Service
 public class FactoryBarcodeService {
-    private static final int RUNNING_LENGTH = 9;
-    private static final long MAX_RUNNING = 999_999_999L;
 
     private final FactoryBarcodeRepository repository;
     private final CartonScanTransactionRepository cartonRepository;
@@ -57,8 +56,8 @@ public class FactoryBarcodeService {
         String sequenceId = sequenceCounterId(year, factoryCode);
         long last = reserveCounter(sequenceId, quantity);
         long first = last - quantity + 1;
-        if (first <= 0 || last > MAX_RUNNING) {
-            throw new IllegalArgumentException("Factory barcode running number exceeded the supported 9-digit range.");
+        if (first <= 0 || last > AppConstants.FactoryBarcode.MAX_RUNNING) {
+            throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_RANGE_EXCEEDED);
         }
 
         long batchNo = reserveCounter("factory_barcode_batch", 1);
@@ -122,11 +121,11 @@ public class FactoryBarcodeService {
             ));
         }
         String statusKey = clean(status);
-        if (statusKey != null && !FilterValue.ALL.equalsIgnoreCase(statusKey)) {
+        if (statusKey != null && !AppConstants.Filter.ALL.equalsIgnoreCase(statusKey)) {
             try {
                 criteria.add(Criteria.where("status").is(FactoryBarcodeStatus.valueOf(statusKey.toUpperCase(Locale.ROOT))));
             } catch (IllegalArgumentException ex) {
-                throw new IllegalArgumentException("Unsupported barcode status: " + status);
+                throw new IllegalArgumentException(AppMessages.unsupportedBarcodeStatus(status));
             }
         }
         String code = clean(factoryCode);
@@ -143,9 +142,9 @@ public class FactoryBarcodeService {
     }
 
     public FactoryBarcode get(String barcode) {
-        String code = required(barcode, "Factory Barcode is required");
+        String code = required(barcode, AppMessages.FACTORY_BARCODE_REQUIRED);
         return repository.findByBarcode(code)
-                .orElseThrow(() -> new IllegalArgumentException("Factory Barcode does not exist: " + code));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.factoryBarcodeDoesNotExist(code)));
     }
 
     public FactoryBarcodeSequenceResponse sequence(Integer yearValue, String factoryCodeValue) {
@@ -154,16 +153,16 @@ public class FactoryBarcodeService {
         Document counter = mongoTemplate.findById(sequenceCounterId(year, factoryCode), Document.class, "system_counters");
         Number current = counter == null ? null : (Number) counter.get("value");
         long next = current == null ? 1L : current.longValue() + 1L;
-        if (next > MAX_RUNNING) throw new IllegalArgumentException("Factory barcode running number is exhausted for this year/factory.");
+        if (next > AppConstants.FactoryBarcode.MAX_RUNNING) throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_EXHAUSTED);
         return new FactoryBarcodeSequenceResponse(year, factoryCode, next, formatBarcode(year, factoryCode, next));
     }
 
     public List<FactoryBarcode> markPrinted(List<String> barcodeValues) {
         if (barcodeValues == null || barcodeValues.isEmpty()) {
-            throw new IllegalArgumentException("Select at least one Factory Barcode to print.");
+            throw new IllegalArgumentException(AppMessages.SELECT_BARCODE_PRINT);
         }
         if (barcodeValues.size() > 500) {
-            throw new IllegalArgumentException("A maximum of 500 labels can be marked printed in one request.");
+            throw new IllegalArgumentException(AppMessages.MAX_BARCODE_PRINT_LABELS);
         }
         LocalDateTime now = LocalDateTime.now();
         String actor = RequestActor.current();
@@ -171,7 +170,7 @@ public class FactoryBarcodeService {
         for (String value : barcodeValues) {
             FactoryBarcode row = get(value);
             if (row.getStatus() == FactoryBarcodeStatus.VOID) {
-                throw new IllegalArgumentException("VOID barcode cannot be printed: " + row.getBarcode());
+                throw new IllegalArgumentException(AppMessages.voidBarcodeCannotPrint(row.getBarcode()));
             }
             row.setPrintCount((row.getPrintCount() == null ? 0 : row.getPrintCount()) + 1);
             row.setLastPrintedAt(now);
@@ -185,7 +184,7 @@ public class FactoryBarcodeService {
     public FactoryBarcode voidBarcode(String barcode, String reason) {
         FactoryBarcode row = get(barcode);
         if (row.getStatus() == FactoryBarcodeStatus.ASSIGNED) {
-            throw new IllegalArgumentException("Assigned Factory Barcode cannot be VOID. Unassign it from the carton first.");
+            throw new IllegalArgumentException(AppMessages.ASSIGNED_BARCODE_VOID_BLOCKED);
         }
         if (row.getStatus() == FactoryBarcodeStatus.VOID) return row;
         LocalDateTime now = LocalDateTime.now();
@@ -198,16 +197,16 @@ public class FactoryBarcodeService {
     }
 
     public synchronized FactoryBarcode assignToCarton(FactoryBarcode barcode, CartonScanTransaction carton) {
-        if (barcode == null) throw new IllegalArgumentException("Factory Barcode is required");
-        if (carton == null) throw new IllegalArgumentException("Carton is required");
+        if (barcode == null) throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_REQUIRED);
+        if (carton == null) throw new IllegalArgumentException(AppMessages.CARTON_REQUIRED);
 
         FactoryBarcode current = get(barcode.getBarcode());
         if (current.getStatus() == FactoryBarcodeStatus.ASSIGNED) {
             if (carton.getId() != null && carton.getId().equals(current.getAssignedCartonId())) return current;
-            throw new IllegalArgumentException("Factory Barcode " + current.getBarcode() + " is already assigned to another carton.");
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeAlreadyAssigned(current.getBarcode()));
         }
         if (current.getStatus() == FactoryBarcodeStatus.VOID) {
-            throw new IllegalArgumentException("Factory Barcode " + current.getBarcode() + " is VOID and cannot be assigned.");
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeVoidAssignment(current.getBarcode()));
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -235,7 +234,7 @@ public class FactoryBarcodeService {
         FactoryBarcode current = get(barcodeValue);
         if (current.getStatus() != FactoryBarcodeStatus.ASSIGNED) return current;
         if (cartonId != null && current.getAssignedCartonId() != null && !cartonId.equals(current.getAssignedCartonId())) {
-            throw new IllegalArgumentException("Factory Barcode is assigned to a different carton.");
+            throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_DIFFERENT_CARTON);
         }
         current.setStatus(FactoryBarcodeStatus.AVAILABLE);
         current.setAssignedBuyerCode(null);
@@ -260,11 +259,10 @@ public class FactoryBarcodeService {
     public FactoryBarcode requireAvailable(String barcodeValue) {
         FactoryBarcode row = get(barcodeValue);
         if (row.getStatus() == FactoryBarcodeStatus.VOID) {
-            throw new IllegalArgumentException("Factory Barcode is VOID: " + row.getBarcode());
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeVoid(row.getBarcode()));
         }
         if (row.getStatus() == FactoryBarcodeStatus.ASSIGNED) {
-            throw new IllegalArgumentException("Factory Barcode is already assigned to carton "
-                    + (row.getAssignedCartonCode() == null ? row.getAssignedCartonId() : row.getAssignedCartonCode()) + ".");
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeAssignedToCarton(row.getAssignedCartonCode() == null ? row.getAssignedCartonId() : row.getAssignedCartonCode()));
         }
         return row;
     }
@@ -272,7 +270,7 @@ public class FactoryBarcodeService {
     public FactoryBarcode requireAssigned(String barcodeValue) {
         FactoryBarcode row = get(barcodeValue);
         if (row.getStatus() != FactoryBarcodeStatus.ASSIGNED) {
-            throw new IllegalArgumentException("Factory Barcode has not been assigned to a carton: " + row.getBarcode());
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeNotAssigned(row.getBarcode()));
         }
         return row;
     }
@@ -280,10 +278,10 @@ public class FactoryBarcodeService {
     public CartonScanTransaction getAssignedCarton(String barcodeValue) {
         FactoryBarcode row = requireAssigned(barcodeValue);
         if (row.getAssignedCartonId() == null) {
-            throw new IllegalArgumentException("Factory Barcode assignment is incomplete: " + row.getBarcode());
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeAssignmentIncomplete(row.getBarcode()));
         }
         return cartonRepository.findById(row.getAssignedCartonId())
-                .orElseThrow(() -> new IllegalArgumentException("Assigned carton record no longer exists for Factory Barcode " + row.getBarcode()));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.assignedCartonNoLongerExists(row.getBarcode())));
     }
 
     private long reserveCounter(String counterId, long increment) {
@@ -297,7 +295,7 @@ public class FactoryBarcodeService {
                 "system_counters"
         );
         Number value = counter == null ? null : (Number) counter.get("value");
-        if (value == null) throw new IllegalStateException("Unable to allocate Factory Barcode running number.");
+        if (value == null) throw new IllegalStateException(AppMessages.UNABLE_ALLOCATE_FACTORY_BARCODE);
         return value.longValue();
     }
 
@@ -307,24 +305,24 @@ public class FactoryBarcodeService {
 
     private String formatBarcode(int year, String factoryCode, long running) {
         String yy = String.format(Locale.ROOT, "%02d", Math.floorMod(year, 100));
-        return yy + factoryCode + String.format(Locale.ROOT, "%0" + RUNNING_LENGTH + "d", running);
+        return yy + factoryCode + String.format(Locale.ROOT, "%0" + AppConstants.FactoryBarcode.RUNNING_LENGTH + "d", running);
     }
 
     private int validateYear(Integer value) {
         int year = value == null ? LocalDate.now().getYear() : value;
-        if (year < 2000 || year > 2099) throw new IllegalArgumentException("Year must be between 2000 and 2099.");
+        if (year < 2000 || year > 2099) throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_YEAR_RANGE);
         return year;
     }
 
     private String validateFactoryCode(String value) {
-        String code = required(value, "Factory Code is required");
-        if (!code.matches("\\d{3}")) throw new IllegalArgumentException("Factory Code must contain exactly 3 digits, for example 002.");
+        String code = required(value, AppMessages.FACTORY_CODE_REQUIRED);
+        if (!code.matches("\\d{3}")) throw new IllegalArgumentException(AppMessages.FACTORY_CODE_FORMAT);
         return code;
     }
 
     private int validateQuantity(Integer value) {
         int quantity = value == null ? 1 : value;
-        if (quantity < 1 || quantity > 1000) throw new IllegalArgumentException("Quantity must be between 1 and 1000.");
+        if (quantity < 1 || quantity > 1000) throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_QUANTITY_RANGE);
         return quantity;
     }
 

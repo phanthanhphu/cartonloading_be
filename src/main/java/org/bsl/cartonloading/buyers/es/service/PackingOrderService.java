@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.service.RequestActor;
 import org.bsl.cartonloading.buyers.es.enums.PackingOrderStatus;
 import org.bsl.cartonloading.buyers.es.enums.WeightStatus;
@@ -115,7 +117,7 @@ public class PackingOrderService {
     public PackingOrder getEntity(String buyerCode, String id) {
         String buyer = requireBuyer(buyerCode);
         return orderRepository.findByIdAndBuyerCode(id, buyer)
-                .orElseThrow(() -> new WorkflowNotFoundException("Order not found"));
+                .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.ORDER_NOT_FOUND));
     }
 
     public PackingOrderResponse create(String buyerCode, PackingOrderRequest request) {
@@ -143,7 +145,7 @@ public class PackingOrderService {
     public void delete(String buyerCode, String id) {
         PackingOrder entity = getEntity(buyerCode, id);
         if (cartonTransactionRepository.countByOrderIdAndBuyerCode(entity.getId(), entity.getBuyerCode()) > 0) {
-            throw new WorkflowValidationException("Cannot delete an Order with physical cartons. Preserve carton and shipment traceability.");
+            throw new WorkflowValidationException(AppMessages.DELETE_ORDER_WITH_CARTONS_BLOCKED);
         }
         masterLineRepository.deleteByOrderIdAndBuyerCode(entity.getId(), entity.getBuyerCode());
         packingLineRepository.deleteByOrderIdAndBuyerCode(entity.getId(), entity.getBuyerCode());
@@ -159,17 +161,17 @@ public class PackingOrderService {
 
     private void apply(PackingOrder entity, PackingOrderRequest request) {
         if (request.orderDate() == null) {
-            throw new WorkflowValidationException("Start Order is required");
+            throw new WorkflowValidationException(AppMessages.START_ORDER_REQUIRED);
         }
         entity.setOrderDate(request.orderDate());
         if (request.endOrderDate() == null) {
-            throw new WorkflowValidationException("End Order is required");
+            throw new WorkflowValidationException(AppMessages.END_ORDER_REQUIRED);
         }
         if (request.endOrderDate().isBefore(request.orderDate())) {
-            throw new WorkflowValidationException("End Order cannot be earlier than Start Order");
+            throw new WorkflowValidationException(AppMessages.END_ORDER_BEFORE_START);
         }
         entity.setEndOrderDate(request.endOrderDate());
-        entity.setOrderName(required(request.orderName(), "Order Name is required"));
+        entity.setOrderName(required(request.orderName(), AppMessages.ORDER_NAME_REQUIRED));
         entity.setSupplierName(trimToNull(request.supplierName()));
         entity.setSupplierNumber(trimToNull(request.supplierNumber()));
         entity.setProductionFacility(trimToNull(request.productionFacility()));
@@ -264,9 +266,9 @@ public class PackingOrderService {
     }
 
     private boolean matchesKeyword(PackingOrderResponse order, String keywordKey) {
-        String completionText = order.completed() ? "YES COMPLETED" : "NO NOT COMPLETED";
-        String assignmentText = "ASSIGN " + order.assignmentStatus() + " " + order.assignedCartonCount() + "/" + order.plannedCartonCount();
-        String weightText = "WEIGHT " + order.weightStatus() + " PASS " + order.passWeightCartonCount() + " FAIL " + order.failWeightCartonCount();
+        String completionText = order.completed() ? AppConstants.SearchText.YES_COMPLETED : AppConstants.SearchText.NO_NOT_COMPLETED;
+        String assignmentText = AppConstants.SearchText.ASSIGN_PREFIX + order.assignmentStatus() + " " + order.assignedCartonCount() + "/" + order.plannedCartonCount();
+        String weightText = AppConstants.SearchText.WEIGHT_PREFIX + order.weightStatus() + AppConstants.SearchText.PASS_TOKEN + order.passWeightCartonCount() + AppConstants.SearchText.FAIL_TOKEN + order.failWeightCartonCount();
         return contains(order.orderName(), keywordKey)
                 || contains(order.createdBy(), keywordKey)
                 || contains(order.status(), keywordKey)
@@ -285,7 +287,7 @@ public class PackingOrderService {
 
     private String requireBuyer(String value) {
         String buyer = BuyerAccess.normalize(value);
-        if (buyer.isEmpty()) throw new WorkflowValidationException("Unsupported Buyer: " + value);
+        if (buyer.isEmpty()) throw new WorkflowValidationException(AppMessages.unsupportedBuyer(value));
         return buyer;
     }
 

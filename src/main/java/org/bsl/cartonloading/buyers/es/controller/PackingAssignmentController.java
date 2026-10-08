@@ -1,9 +1,9 @@
 package org.bsl.cartonloading.buyers.es.controller;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.bsl.cartonloading.buyers.es.constants.WorkflowStage;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
-import org.bsl.cartonloading.common.constants.FilterValue;
+import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.es.dto.barcode.BarcodeAssignmentPageResponse;
 import org.bsl.cartonloading.buyers.es.dto.barcode.PackingMasterAssignmentPageResponse;
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodeAssignRequest;
@@ -14,10 +14,10 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 /** Stage 2: explicit quantity confirmation and barcode assignment only. */
-@Tag(name = WorkflowStage.PACKING_ASSIGN)
+@Tag(name = AppConstants.WorkflowStage.PACKING_ASSIGN)
 @RestController
-@RequestMapping("/api/buyers/{buyer}/packing/orders/{orderId}/barcode-assignment")
-@PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
+@RequestMapping(AppConstants.ApiPath.BARCODE_WORKFLOW_PACKING_ASSIGNMENT)
+@PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
 public class PackingAssignmentController {
     private final CartonLoadingService service;
     public PackingAssignmentController(CartonLoadingService service) { this.service = service; }
@@ -29,9 +29,9 @@ public class PackingAssignmentController {
             @RequestParam(required = false) String articleNumber,
             @RequestParam(required = false) String styleNumber,
             @RequestParam(required = false) String style,
-            @RequestParam(defaultValue = "ALL") String assignmentStatus,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size) {
+            @RequestParam(defaultValue = AppConstants.Filter.ALL) String assignmentStatus,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listMasterRowsForBarcodeAssignment(
                 buyer, orderId, poNumber, articleNumber, styleNumber, style, assignmentStatus, page, size
         );
@@ -40,8 +40,8 @@ public class PackingAssignmentController {
     @GetMapping("/cartons")
     public BarcodeAssignmentPageResponse cartons(@PathVariable String buyer, @PathVariable String orderId,
             @RequestParam(required = false) String keyword,
-            @RequestParam(defaultValue = FilterValue.UNASSIGNED) String assignment,
-            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "50") int size) {
+            @RequestParam(defaultValue = AppConstants.Filter.UNASSIGNED) String assignment,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.LARGE_PAGE_SIZE) int size) {
         return service.listCartonsForBarcodeAssignment(buyer, orderId, keyword, assignment, page, size);
     }
     @GetMapping("/check/{barcode}")

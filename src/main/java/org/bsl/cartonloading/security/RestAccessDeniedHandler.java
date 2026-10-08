@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.security;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -29,7 +31,7 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", false);
         body.put("status", 403);
-        body.put("message", "You do not have permission to perform this action.");
+        body.put("message", AppMessages.ACTION_PERMISSION_DENIED);
         body.put("path", request.getRequestURI());
         body.put("timestamp", System.currentTimeMillis());
 

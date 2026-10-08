@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.controller;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import org.bsl.cartonloading.model.AuditLog;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.springframework.data.domain.Page;
@@ -19,8 +21,8 @@ public class AuditLogController {
                                @RequestParam(required = false) String resourceType,
                                @RequestParam(required = false) String resourceId,
                                @RequestParam(required = false) String ipAddress,
-                               @RequestParam(defaultValue = "0") int page,
-                               @RequestParam(defaultValue = "25") int size) {
+                               @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+                               @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.search(username, action, resourceType, resourceId, ipAddress, page, size);
     }
 }

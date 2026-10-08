@@ -7,13 +7,14 @@ import org.bsl.cartonloading.buyers.es.enums.CartonScanStatus;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
-@Document(collection = "carton_scan_transactions")
+@Document(collection = AppConstants.Collection.CARTON_OPERATIONS)
 public class CartonScanTransaction {
     @Id
     private String id;

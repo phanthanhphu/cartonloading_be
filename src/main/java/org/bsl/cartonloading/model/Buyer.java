@@ -5,12 +5,13 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
-@Document(collection = "buyers")
+@Document(collection = AppConstants.Collection.BUYERS)
 public class Buyer {
     @Id
     private String id;

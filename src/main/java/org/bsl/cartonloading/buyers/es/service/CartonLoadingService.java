@@ -1,8 +1,9 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
-import org.bsl.cartonloading.common.constants.FilterValue;
+import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.es.enums.WeightSource;
 import org.bsl.cartonloading.buyers.es.enums.WeightStatus;
 import org.bsl.cartonloading.buyers.es.enums.ShipmentStatus;
@@ -55,15 +56,6 @@ import java.util.regex.Pattern;
 
 @Service
 public class CartonLoadingService {
-    private static final List<CartonScanStatus> COUNTED_STATUSES = List.of(
-            CartonScanStatus.WAITING_WEIGHT,
-            CartonScanStatus.COMPLETED,
-            CartonScanStatus.WEIGHT_WARNING
-    );
-    private static final List<CartonScanStatus> COMPLETED_STATUSES = List.of(
-            CartonScanStatus.COMPLETED,
-            CartonScanStatus.WEIGHT_WARNING
-    );
 
     private final PackingOrderService orderService;
     private final PackingAllocationLineRepository masterRepository;
@@ -119,7 +111,7 @@ public class CartonLoadingService {
                 .toList();
         if (masterLines.isEmpty()) {
             return new CartonPlanGenerationResult(false, 0, 0, 0,
-                    "Upload the WSP ALLOCATION / Order Items before generating Carton Master data.");
+                    AppMessages.CARTON_MASTER_REQUIRES_ORDER_ITEMS);
         }
 
         List<PackingListLine> packingLines = packingRepository
@@ -130,12 +122,11 @@ public class CartonLoadingService {
         List<CartonScanTransaction> existing = transactionRepository.findByOrderIdAndBuyerCode(order.getId(), buyer);
         if (!existing.isEmpty() && !replace) {
             return new CartonPlanGenerationResult(false, masterLines.size(), 0, 0,
-                    "Carton Master data already exists for this Order.");
+                    AppMessages.CARTON_MASTER_ALREADY_EXISTS);
         }
         if (replace && existing.stream().anyMatch(this::hasOperationalData)) {
             throw new IllegalArgumentException(
-                    "Carton Master data cannot be regenerated because Factory Barcode assignment, scanning, or weighing has already started. "
-                            + "Unassign unused barcodes first or create a new Order."
+                    AppMessages.CARTON_MASTER_REGEN_LOCKED
             );
         }
         if (replace) transactionRepository.deleteByOrderIdAndBuyerCode(order.getId(), buyer);
@@ -227,7 +218,7 @@ public class CartonLoadingService {
 
         transactionRepository.saveAll(cartons);
         orderService.touchFromMaster(order);
-        socketPublisher.cartonLoadingChanged("PLAN_GENERATED", order.getId());
+        socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.PLAN_GENERATED, order.getId());
         return new CartonPlanGenerationResult(true, masterLines.size(), cartons.size(), skipped,
                 "Carton Master generated from Master Total ctns. One row represents one physical carton.");
     }
@@ -253,8 +244,7 @@ public class CartonLoadingService {
         List<CartonScanTransaction> existing = transactionRepository.findByOrderIdAndBuyerCode(order.getId(), buyer);
         if (existing.stream().anyMatch(this::hasOperationalData)) {
             throw new IllegalArgumentException(
-                    "Carton quantity cannot be changed after Barcode Assignment or Weight Check has started. "
-                            + "Unassign/reset the affected cartons first, then edit the quantity again."
+                    AppMessages.CARTON_QUANTITY_CHANGE_LOCKED
             );
         }
     }
@@ -268,7 +258,7 @@ public class CartonLoadingService {
         PackingOrder order = orderService.getEntity(buyer, orderId);
         if (transactionRepository.countByOrderIdAndBuyerCode(order.getId(), buyer) <= 0) {
             return new CartonPlanGenerationResult(false, 0, 0, 0,
-                    "Carton Master has not been generated yet; no physical-carton refresh was required.");
+                    AppMessages.CARTON_MASTER_NOT_GENERATED_NO_REFRESH);
         }
         assertGeneratedPlanEditable(buyer, order.getId());
         return generateFromWsp(buyer, order.getId(), true);
@@ -319,10 +309,10 @@ public class CartonLoadingService {
     ) {
         String buyer = requireBuyer(buyerCode);
         PackingOrder order = orderService.getEntity(buyer, orderId);
-        String itemId = required(masterLineId, "WSP item is required");
+        String itemId = required(masterLineId, AppMessages.WSP_ITEM_REQUIRED);
         masterRepository.findById(itemId)
                 .filter(item -> order.getId().equals(item.getOrderId()) && buyer.equals(item.getBuyerCode()))
-                .orElseThrow(() -> new IllegalArgumentException("WSP item not found in the selected Order"));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.WSP_ITEM_NOT_FOUND_SELECTED_ORDER));
         return transactionRepository
                 .findByOrderIdAndBuyerCodeAndMasterLineIdOrderByCartonSequenceAsc(order.getId(), buyer, itemId);
     }
@@ -493,16 +483,16 @@ public class CartonLoadingService {
     }
 
     private String assignmentStatus(int expected, long generated, long assigned) {
-        if (expected <= 0 || generated != expected) return "PLAN_MISMATCH";
-        if (assigned <= 0) return "NOT_STARTED";
-        if (assigned >= expected) return "COMPLETED";
-        return "IN_PROGRESS";
+        if (expected <= 0 || generated != expected) return AppConstants.ProgressStatus.PLAN_MISMATCH;
+        if (assigned <= 0) return AppConstants.ProgressStatus.NOT_STARTED;
+        if (assigned >= expected) return AppConstants.ProgressStatus.COMPLETED;
+        return AppConstants.ProgressStatus.IN_PROGRESS;
     }
 
     private boolean masterAssignmentStatusMatches(String status, String filter) {
-        if (filter == null || FilterValue.ALL.equalsIgnoreCase(filter)) return true;
-        if ("UNASSIGNED".equalsIgnoreCase(filter)) return !"COMPLETED".equalsIgnoreCase(status);
-        if ("ASSIGNED".equalsIgnoreCase(filter)) return "COMPLETED".equalsIgnoreCase(status);
+        if (filter == null || AppConstants.Filter.ALL.equalsIgnoreCase(filter)) return true;
+        if (AppConstants.Filter.UNASSIGNED.equalsIgnoreCase(filter)) return !AppConstants.ProgressStatus.COMPLETED.equalsIgnoreCase(status);
+        if (AppConstants.Filter.ASSIGNED.equalsIgnoreCase(filter)) return AppConstants.ProgressStatus.COMPLETED.equalsIgnoreCase(status);
         return status.equalsIgnoreCase(filter);
     }
 
@@ -519,26 +509,26 @@ public class CartonLoadingService {
     ) {
         String buyer = requireBuyer(buyerCode);
         PackingOrder order = orderService.getEntity(buyer, orderId);
-        if (request == null) throw new IllegalArgumentException("Assignment request is required");
-        String barcodeValue = required(request.factoryBarcode(), "Factory Barcode is required");
-        String cartonId = required(request.cartonId(), "Carton is required");
+        if (request == null) throw new IllegalArgumentException(AppMessages.ASSIGNMENT_REQUEST_REQUIRED);
+        String barcodeValue = required(request.factoryBarcode(), AppMessages.FACTORY_BARCODE_REQUIRED);
+        String cartonId = required(request.cartonId(), AppMessages.CARTON_REQUIRED);
 
         CartonScanTransaction existingCarton = transactionRepository
                 .findByIdAndOrderIdAndBuyerCode(cartonId, order.getId(), buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Carton Master record not found in the selected Order"));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.CARTON_MASTER_NOT_FOUND_SELECTED_ORDER));
         if (existingCarton.getStatus() != CartonScanStatus.PLANNED) {
-            throw new IllegalArgumentException("Factory Barcode can only be assigned before weighing starts. Carton is " + existingCarton.getStatus() + ".");
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeStatusBlocksAssignment(existingCarton.getStatus()));
         }
         if (!blank(existingCarton.getFactoryBarcode())) {
             if (barcodeValue.equals(existingCarton.getFactoryBarcode())) return existingCarton;
-            throw new IllegalArgumentException("Carton " + existingCarton.getCartonCode() + " already has Factory Barcode " + existingCarton.getFactoryBarcode() + ".");
+            throw new IllegalArgumentException(AppMessages.cartonAlreadyHasFactoryBarcode(existingCarton.getCartonCode(), existingCarton.getFactoryBarcode()));
         }
 
         FactoryBarcode label = factoryBarcodeService.requireAvailable(barcodeValue);
         BigDecimal plannedQuantity = existingCarton.getCartonPcs() == null ? existingCarton.getQtyPerCarton() : existingCarton.getCartonPcs();
         BigDecimal actualQuantity = request.actualQuantity();
         ShipmentWorkflowPolicy.requireQuantity(actualQuantity, plannedQuantity);
-        if (!blank(existingCarton.getShipmentId())) throw new IllegalArgumentException("This carton already belongs to a shipment plan.");
+        if (!blank(existingCarton.getShipmentId())) throw new IllegalArgumentException(AppMessages.CARTON_SHIPMENT_PLAN_LOCKED);
         LocalDateTime now = LocalDateTime.now();
         Query claimQuery = Query.query(Criteria.where("_id").is(cartonId)
                 .and("buyerCode").is(buyer)
@@ -562,10 +552,10 @@ public class CartonLoadingService {
                     CartonScanTransaction.class
             );
         } catch (DuplicateKeyException ex) {
-            throw new IllegalArgumentException("Factory Barcode " + label.getBarcode() + " was assigned by another operator.");
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeAssignedByAnotherOperator(label.getBarcode()));
         }
         if (claimed == null) {
-            throw new IllegalArgumentException("Carton changed before assignment. Refresh the Carton Master list and scan again.");
+            throw new IllegalArgumentException(AppMessages.CARTON_CHANGED_BEFORE_ASSIGNMENT);
         }
 
         try {
@@ -582,7 +572,7 @@ public class CartonLoadingService {
             throw ex;
         }
 
-        socketPublisher.cartonLoadingChanged("FACTORY_BARCODE_ASSIGNED", claimed.getId());
+        socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.FACTORY_BARCODE_ASSIGNED, claimed.getId());
         return claimed;
     }
 
@@ -594,15 +584,15 @@ public class CartonLoadingService {
         String buyer = requireBuyer(buyerCode);
         PackingOrder order = orderService.getEntity(buyer, orderId);
         CartonScanTransaction carton = transactionRepository
-                .findByIdAndOrderIdAndBuyerCode(required(cartonId, "Carton is required"), order.getId(), buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Carton Master record not found in the selected Order"));
+                .findByIdAndOrderIdAndBuyerCode(required(cartonId, AppMessages.CARTON_REQUIRED), order.getId(), buyer)
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.CARTON_MASTER_NOT_FOUND_SELECTED_ORDER));
         if (carton.getCompletedAt() != null || carton.getShippedAt() != null) {
-            throw new IllegalArgumentException("Completed or shipped cartons cannot be changed.");
+            throw new IllegalArgumentException(AppMessages.COMPLETED_SHIPPED_CHANGE_LOCKED);
         }
         if (carton.getStatus() != CartonScanStatus.PLANNED || carton.getJobId() != null || carton.getWeightKg() != null) {
-            throw new IllegalArgumentException("This carton has already started Weight Check. Reset Weight as Admin before changing its Factory Barcode.");
+            throw new IllegalArgumentException(AppMessages.WEIGHT_CHECK_STARTED_BARCODE_CHANGE_BLOCKED);
         }
-        if (!blank(carton.getShipmentId())) throw new IllegalArgumentException("Ask Sales to cancel the shipment plan before unassigning this carton.");
+        if (!blank(carton.getShipmentId())) throw new IllegalArgumentException(AppMessages.CANCEL_SHIPMENT_BEFORE_UNASSIGN);
         String barcodeValue = clean(carton.getFactoryBarcode());
         if (barcodeValue == null) return carton;
 
@@ -613,7 +603,7 @@ public class CartonLoadingService {
                 new Update().unset("factoryBarcode").unset("factoryBarcodeAssignedBy").unset("factoryBarcodeAssignedAt")
                         .unset("assignedQuantity").unset("productionLine").set("updatedAt", LocalDateTime.now()),
                 FindAndModifyOptions.options().returnNew(true), CartonScanTransaction.class);
-        if (saved == null) throw new IllegalArgumentException("Carton changed. Refresh before unassigning its barcode.");
+        if (saved == null) throw new IllegalArgumentException(AppMessages.CARTON_CHANGED_UNASSIGN);
         try {
             factoryBarcodeService.releaseAssignment(barcodeValue, saved.getId());
         } catch (RuntimeException ex) {
@@ -626,7 +616,7 @@ public class CartonLoadingService {
                     CartonScanTransaction.class);
             throw ex;
         }
-        socketPublisher.cartonLoadingChanged("FACTORY_BARCODE_UNASSIGNED", saved.getId());
+        socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.FACTORY_BARCODE_UNASSIGNED, saved.getId());
         return saved;
     }
 
@@ -643,19 +633,19 @@ public class CartonLoadingService {
     ) {
         String buyer = requireBuyer(buyerCode);
         PackingOrder order = orderService.getEntity(buyer, orderId);
-        String reason = required(request == null ? null : request.reason(), "Correction reason is required");
+        String reason = required(request == null ? null : request.reason(), AppMessages.CORRECTION_REASON_REQUIRED);
         CartonScanTransaction carton = transactionRepository
-                .findByIdAndOrderIdAndBuyerCode(required(cartonId, "Carton is required"), order.getId(), buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Carton Master record not found in the selected Order"));
+                .findByIdAndOrderIdAndBuyerCode(required(cartonId, AppMessages.CARTON_REQUIRED), order.getId(), buyer)
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.CARTON_MASTER_NOT_FOUND_SELECTED_ORDER));
 
         if (carton.getCompletedAt() != null || carton.getShippedAt() != null) {
-            throw new IllegalArgumentException("Completed or shipped cartons are locked and cannot be reset.");
+            throw new IllegalArgumentException(AppMessages.COMPLETED_SHIPPED_RESET_LOCKED);
         }
         if (!hasWeightStarted(carton)) {
-            throw new IllegalArgumentException("This carton has not started Weight Check, so no weight reset is required.");
+            throw new IllegalArgumentException(AppMessages.NO_WEIGHT_RESET_REQUIRED);
         }
         if (carton.getStatus() == CartonScanStatus.CANCELLED) {
-            throw new IllegalArgumentException("Cancelled carton cannot be corrected.");
+            throw new IllegalArgumentException(AppMessages.CANCELLED_CARTON_CORRECTION_BLOCKED);
         }
 
         String actor = RequestActor.current();
@@ -693,21 +683,24 @@ public class CartonLoadingService {
         CartonScanTransaction saved = mongoTemplate.findAndModify(Query.query(Criteria.where("_id").is(carton.getId())
                 .and("completedAt").is(null).and("shippedAt").is(null)), reset,
                 FindAndModifyOptions.options().returnNew(true), CartonScanTransaction.class);
-        if (saved == null) throw new IllegalArgumentException("Carton was completed concurrently and cannot be reset.");
+        if (saved == null) throw new IllegalArgumentException(AppMessages.CARTON_CONCURRENT_COMPLETION);
         auditLogService.log(
                 actor,
-                "RESET_CARTON_WEIGHT",
-                "CARTON",
+                AppConstants.AuditAction.RESET_CARTON_WEIGHT,
+                AppConstants.AuditResource.CARTON,
                 saved.getId(),
-                "Order " + order.getOrderName() + ", carton " + firstText(saved.getCartonCode(), saved.getId())
-                        + ", barcode " + firstText(saved.getFactoryBarcode(), "N/A")
-                        + ", previous weight " + previousWeight
-                        + ", previous status " + firstText(previousStatus, "N/A")
-                        + ", reason: " + reason,
+                AppMessages.resetCartonWeightAudit(
+                        order.getOrderName(),
+                        firstText(saved.getCartonCode(), saved.getId()),
+                        saved.getFactoryBarcode(),
+                        previousWeight,
+                        previousStatus,
+                        reason
+                ),
                 null,
                 null
         );
-        socketPublisher.cartonLoadingChanged("WEIGHT_RESET", saved.getId());
+        socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.WEIGHT_RESET, saved.getId());
         return saved;
     }
 
@@ -722,11 +715,11 @@ public class CartonLoadingService {
     ) {
         String buyer = requireBuyer(buyerCode);
         PackingOrder order = orderService.getEntity(buyer, orderId);
-        if (request == null) throw new IllegalArgumentException("Factory Barcode scan request is required");
+        if (request == null) throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_SCAN_REQUEST_REQUIRED);
         boolean manualMode = Boolean.TRUE.equals(request.manualMode()) || blank(request.stationCode());
         ScaleStation station = manualMode ? null : stationService.requireActive(request.stationCode());
         String stationCode = station == null ? null : station.getStationCode();
-        String barcodeValue = required(request.factoryBarcode(), "Factory Barcode is required");
+        String barcodeValue = required(request.factoryBarcode(), AppMessages.FACTORY_BARCODE_REQUIRED);
         String scanId = clean(request.scanId());
 
         if (scanId != null) {
@@ -736,7 +729,7 @@ public class CartonLoadingService {
                 boolean sameStation = stationCode == null ? blank(existing.getStationCode()) : stationCode.equals(existing.getStationCode());
                 if (!buyer.equals(existing.getBuyerCode()) || !order.getId().equals(existing.getOrderId()) || !sameStation
                         || !barcodeValue.equals(existing.getFactoryBarcode())) {
-                    throw new IllegalArgumentException("Scan ID is already used by another station or Order.");
+                    throw new IllegalArgumentException(AppMessages.SCAN_ID_ALREADY_USED);
                 }
                 return existing;
             }
@@ -746,23 +739,22 @@ public class CartonLoadingService {
             Optional<CartonScanTransaction> openJob = transactionRepository
                     .findFirstByStationCodeAndStatusOrderByScannedAtDesc(stationCode, CartonScanStatus.WAITING_WEIGHT);
             if (openJob.isPresent()) {
-                throw new IllegalArgumentException("Station " + stationCode + " already has Job "
-                        + openJob.get().getJobId() + " waiting for weight.");
+                throw new IllegalArgumentException(AppMessages.stationJobWaiting(stationCode, openJob.get().getJobId()));
             }
         }
 
         FactoryBarcode label = factoryBarcodeService.requireAssigned(barcodeValue);
         if (!buyer.equals(label.getAssignedBuyerCode()) || !order.getId().equals(label.getAssignedOrderId())) {
-            throw new IllegalArgumentException("Factory Barcode belongs to another Buyer/Order: " + label.getBarcode());
+            throw new IllegalArgumentException(AppMessages.factoryBarcodeBelongsToAnotherBuyerOrder(label.getBarcode()));
         }
         CartonScanTransaction carton = transactionRepository
                 .findByIdAndOrderIdAndBuyerCode(label.getAssignedCartonId(), order.getId(), buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Assigned carton record was not found for Factory Barcode " + label.getBarcode()));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.assignedCartonNotFoundForBarcode(label.getBarcode())));
         if (!label.getBarcode().equals(carton.getFactoryBarcode())) {
-            throw new IllegalArgumentException("Factory Barcode mapping is inconsistent. Please contact IT before weighing this carton.");
+            throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_MAPPING_INCONSISTENT);
         }
         if (carton.getStatus() != CartonScanStatus.PLANNED) {
-            throw new IllegalArgumentException("Carton " + carton.getCartonCode() + " is already " + carton.getStatus() + ".");
+            throw new IllegalArgumentException(AppMessages.cartonAlreadyStatus(carton.getCartonCode(), carton.getStatus()));
         }
 
         requireCartonShipmentReady(carton);
@@ -802,15 +794,15 @@ public class CartonLoadingService {
                     FindAndModifyOptions.options().returnNew(true),
                     CartonScanTransaction.class
             );
-            if (claimed == null) throw new IllegalArgumentException("This carton was already taken by another station. Scan again after refreshing.");
-            socketPublisher.cartonLoadingChanged("WAITING_WEIGHT", claimed.getId());
+            if (claimed == null) throw new IllegalArgumentException(AppMessages.CARTON_TAKEN_BY_OTHER_STATION);
+            socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.WAITING_WEIGHT, claimed.getId());
             return claimed;
         } catch (DuplicateKeyException ex) {
             if (scanId != null) {
                 Optional<CartonScanTransaction> repeated = transactionRepository.findByScanId(scanId);
                 if (repeated.isPresent()) return repeated.get();
             }
-            throw new IllegalArgumentException("Factory Barcode scan was submitted more than once or the station is busy.");
+            throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_SCAN_DUPLICATE_OR_BUSY);
         }
     }
 
@@ -825,7 +817,7 @@ public class CartonLoadingService {
     ) {
         String buyer = requireBuyer(buyerCode);
         PackingOrder order = orderService.getEntity(buyer, orderId);
-        String barcode = required(request.barcode(), "Barcode is required");
+        String barcode = required(request.barcode(), AppMessages.BARCODE_REQUIRED);
         String normalized = normalizeBarcode(barcode);
         ParsedQr parsed = parseQr(barcode);
 
@@ -844,10 +836,10 @@ public class CartonLoadingService {
                 .map(this::masterItemSummary)
                 .toList();
         String message = items.isEmpty()
-                ? "QR/barcode does not match any generated Master Data item in the selected Order."
+                ? AppMessages.QA_BARCODE_NO_MASTER_MATCH
                 : items.size() == 1
-                    ? "Item matched. The first unfinished child will be selected automatically when scanned."
-                    : "More than one item uses this PO/Article. Select the correct Size/Color item.";
+                    ? AppMessages.ITEM_MATCHED_AUTO_CHILD
+                    : AppMessages.QA_BARCODE_AMBIGUOUS_MASTER;
         return new CartonItemLookupResponse(!items.isEmpty(), barcode, normalized, message, items);
     }
 
@@ -868,7 +860,7 @@ public class CartonLoadingService {
         boolean manualMode = Boolean.TRUE.equals(request.manualMode()) || blank(request.stationCode());
         ScaleStation station = manualMode ? null : stationService.requireActive(request.stationCode());
         String stationCode = station == null ? null : station.getStationCode();
-        String barcode = required(request.barcode(), "QA Code is required");
+        String barcode = required(request.barcode(), AppMessages.QA_CODE_REQUIRED);
         String selectedMasterLineId = clean(request.masterLineId());
         String scanId = clean(request.scanId());
 
@@ -883,7 +875,7 @@ public class CartonLoadingService {
                 if (!buyer.equals(existing.getBuyerCode())
                         || !order.getId().equals(existing.getOrderId())
                         || !sameStation) {
-                    throw new IllegalArgumentException("Scan ID is already used by another station or Order.");
+                    throw new IllegalArgumentException(AppMessages.SCAN_ID_ALREADY_USED);
                 }
                 return existing;
             }
@@ -893,8 +885,7 @@ public class CartonLoadingService {
             Optional<CartonScanTransaction> openJob = transactionRepository
                     .findFirstByStationCodeAndStatusOrderByScannedAtDesc(stationCode, CartonScanStatus.WAITING_WEIGHT);
             if (openJob.isPresent()) {
-                throw new IllegalArgumentException("Station " + stationCode + " already has Job "
-                        + openJob.get().getJobId() + " waiting for weight.");
+                throw new IllegalArgumentException(AppMessages.stationJobWaiting(stationCode, openJob.get().getJobId()));
             }
         }
 
@@ -911,11 +902,11 @@ public class CartonLoadingService {
         if (matchedRows.isEmpty()) {
             if (selectedMasterLineId != null) {
                 throw new IllegalArgumentException(
-                        "The selected item does not match this QA Code in the selected Order."
+                        AppMessages.QA_SELECTED_ITEM_MISMATCH
                 );
             }
             throw new IllegalArgumentException(
-                    "QA Code does not match any generated Master Data item in the selected Order."
+                    AppMessages.QA_NO_MASTER_ITEM
             );
         }
 
@@ -926,7 +917,7 @@ public class CartonLoadingService {
             }
         }
         if (availableByMaster.isEmpty()) {
-            throw new IllegalArgumentException("All cartons matching this QA Code have already been scanned.");
+            throw new IllegalArgumentException(AppMessages.QA_ALL_CARTONS_SCANNED);
         }
         if (availableByMaster.size() > 1) {
             String choices = availableByMaster.values().stream()
@@ -937,8 +928,7 @@ public class CartonLoadingService {
                     .reduce((left, right) -> left + ", " + right)
                     .orElse("multiple Master Data rows");
             throw new IllegalArgumentException(
-                    "QA Code matches more than one unfinished Master Data row (" + choices
-                            + "). Select the correct Size/Color item first."
+                    AppMessages.qaCodeAmbiguous(choices)
             );
         }
 
@@ -976,17 +966,17 @@ public class CartonLoadingService {
             );
             if (claimed == null) {
                 throw new IllegalArgumentException(
-                        "The next carton was taken by another scanner. Scan the QA Code again."
+                        AppMessages.NEXT_CARTON_TAKEN
                 );
             }
-            socketPublisher.cartonLoadingChanged("WAITING_WEIGHT", claimed.getId());
+            socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.WAITING_WEIGHT, claimed.getId());
             return claimed;
         } catch (DuplicateKeyException ex) {
             if (scanId != null) {
                 Optional<CartonScanTransaction> repeated = transactionRepository.findByScanId(scanId);
                 if (repeated.isPresent()) return repeated.get();
             }
-            throw new IllegalArgumentException("The QA scan was submitted more than once. Search again when the current child is ready.");
+            throw new IllegalArgumentException(AppMessages.QA_SCAN_DUPLICATE);
         }
     }
 
@@ -1004,23 +994,22 @@ public class CartonLoadingService {
         Optional<CartonScanTransaction> openJob = transactionRepository
                 .findFirstByStationCodeAndStatusOrderByScannedAtDesc(stationCode, CartonScanStatus.WAITING_WEIGHT);
         if (openJob.isPresent()) {
-            throw new IllegalArgumentException("Station " + stationCode + " already has Job "
-                    + openJob.get().getJobId() + " waiting for PLC weight.");
+            throw new IllegalArgumentException(AppMessages.stationJobWaitingForPlc(stationCode, openJob.get().getJobId()));
         }
 
         CartonScanTransaction carton = transactionRepository
                 .findByIdAndOrderIdAndBuyerCode(cartonId, order.getId(), buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Child item record not found"));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.CHILD_ITEM_NOT_FOUND));
         if (carton.getStatus() != CartonScanStatus.PLANNED) {
-            throw new IllegalArgumentException("Item " + carton.getCartonCode() + " is already " + carton.getStatus() + ".");
+            throw new IllegalArgumentException(AppMessages.itemAlreadyStatus(carton.getCartonCode(), carton.getStatus()));
         }
 
-        String barcode = required(request.barcode(), "Barcode is required");
+        String barcode = required(request.barcode(), AppMessages.BARCODE_REQUIRED);
         if (!qrMatchesItem(parseQr(barcode), normalizeBarcode(barcode), carton)) {
-            throw new IllegalArgumentException("Scanned QR does not match PO " + carton.getPoNumber() + " / Article " + carton.getArticleNumber());
+            throw new IllegalArgumentException(AppMessages.scannedQrMismatch(carton.getPoNumber(), carton.getArticleNumber()));
         }
         BigDecimal weight = requireWeight(request.weightKg(), station);
-        String reason = required(request.reason(), "Manual input reason is required");
+        String reason = required(request.reason(), AppMessages.MANUAL_INPUT_REASON_REQUIRED);
         LocalDateTime now = LocalDateTime.now();
         carton.setJobId(nextCounter("carton_loading_job"));
         carton.setStationCode(stationCode);
@@ -1050,20 +1039,19 @@ public class CartonLoadingService {
         Optional<CartonScanTransaction> openJob = transactionRepository
                 .findFirstByStationCodeAndStatusOrderByScannedAtDesc(stationCode, CartonScanStatus.WAITING_WEIGHT);
         if (openJob.isPresent()) {
-            throw new IllegalArgumentException("Station " + stationCode + " already has Job "
-                    + openJob.get().getJobId() + " waiting for weight.");
+            throw new IllegalArgumentException(AppMessages.stationJobWaiting(stationCode, openJob.get().getJobId()));
         }
 
         CartonScanTransaction carton = transactionRepository
                 .findByIdAndOrderIdAndBuyerCode(cartonId, order.getId(), buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Child item record not found"));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.CHILD_ITEM_NOT_FOUND));
         if (carton.getStatus() != CartonScanStatus.PLANNED) {
-            throw new IllegalArgumentException("Item " + carton.getCartonCode() + " is already " + carton.getStatus() + ".");
+            throw new IllegalArgumentException(AppMessages.itemAlreadyStatus(carton.getCartonCode(), carton.getStatus()));
         }
 
-        String barcode = required(request.barcode(), "Barcode is required");
+        String barcode = required(request.barcode(), AppMessages.BARCODE_REQUIRED);
         if (!qrMatchesItem(parseQr(barcode), normalizeBarcode(barcode), carton)) {
-            throw new IllegalArgumentException("Scanned QR does not match PO " + carton.getPoNumber() + " / Article " + carton.getArticleNumber());
+            throw new IllegalArgumentException(AppMessages.scannedQrMismatch(carton.getPoNumber(), carton.getArticleNumber()));
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -1078,10 +1066,10 @@ public class CartonLoadingService {
         carton.setUpdatedAt(now);
         try {
             CartonScanTransaction saved = transactionRepository.save(carton);
-            socketPublisher.cartonLoadingChanged("WAITING_WEIGHT", saved.getId());
+            socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.WAITING_WEIGHT, saved.getId());
             return saved;
         } catch (DuplicateKeyException ex) {
-            throw new IllegalArgumentException("Another item Job was created at this station at the same time. Reload and try again.");
+            throw new IllegalArgumentException(AppMessages.ANOTHER_ITEM_JOB_CREATED);
         }
     }
 
@@ -1090,7 +1078,7 @@ public class CartonLoadingService {
         String buyer = requireBuyer(buyerCode);
         PackingOrder order = orderService.getEntity(buyer, orderId);
         stationService.requireActive(request.stationCode());
-        String barcode = required(request.barcode(), "Barcode is required");
+        String barcode = required(request.barcode(), AppMessages.BARCODE_REQUIRED);
         String normalized = normalizeBarcode(barcode);
 
         List<PackingListLine> matches = packingRepository.findByOrderIdAndBuyerCode(order.getId(), buyer).stream()
@@ -1100,10 +1088,10 @@ public class CartonLoadingService {
 
         List<CartonCandidateResponse> candidates = matches.stream().map(this::candidate).toList();
         String message = candidates.isEmpty()
-                ? "Barcode does not match any Packing List row in the selected Order."
+                ? AppMessages.BARCODE_NO_PACKING_LIST_MATCH
                 : candidates.size() == 1
                     ? "Packing List row matched."
-                    : "More than one Packing List row uses this Article. Select the correct Size/Color row.";
+                    : AppMessages.BARCODE_AMBIGUOUS_PACKING_LIST;
         return new CartonLookupResponse(!candidates.isEmpty(), barcode, normalized, message, candidates, progress(buyer, orderId));
     }
 
@@ -1121,21 +1109,21 @@ public class CartonLoadingService {
         Optional<CartonScanTransaction> openJob = transactionRepository
                 .findFirstByStationCodeAndStatusOrderByScannedAtDesc(stationCode, CartonScanStatus.WAITING_WEIGHT);
         if (openJob.isPresent()) {
-            throw new IllegalArgumentException("Station " + stationCode + " already has Job " + openJob.get().getJobId() + " waiting for weight.");
+            throw new IllegalArgumentException(AppMessages.stationJobWaiting(stationCode, openJob.get().getJobId()));
         }
 
-        String barcode = required(request.barcode(), "Barcode is required");
+        String barcode = required(request.barcode(), AppMessages.BARCODE_REQUIRED);
         PackingListLine line = packingRepository.findByIdAndOrderIdAndBuyerCode(
-                        required(request.packingLineId(), "Packing List row is required"), order.getId(), buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Packing List row not found"));
+                        required(request.packingLineId(), AppMessages.PACKING_LIST_ROW_REQUIRED), order.getId(), buyer)
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.PACKING_LIST_ROW_NOT_FOUND));
         if (!barcodeMatches(normalizeBarcode(barcode), line.getArticleNumber())) {
-            throw new IllegalArgumentException("Scanned barcode does not match Article " + line.getArticleNumber());
+            throw new IllegalArgumentException(AppMessages.scannedBarcodeArticleMismatch(line.getArticleNumber()));
         }
 
         int planned = plannedCartons(line);
-        long alreadyCounted = transactionRepository.countByPackingLineIdAndStatusIn(line.getId(), COUNTED_STATUSES);
+        long alreadyCounted = transactionRepository.countByPackingLineIdAndStatusIn(line.getId(), CartonScanStatus.countedStatuses());
         if (alreadyCounted >= planned) {
-            throw new IllegalArgumentException("This Packing List row is already complete: " + alreadyCounted + "/" + planned + " cartons.");
+            throw new IllegalArgumentException(AppMessages.packingListRowComplete(alreadyCounted, planned));
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -1159,7 +1147,7 @@ public class CartonLoadingService {
         entity.setCartonPcs(line.getQtyPerCarton());
         long allocatedSequence = nextCounter("carton_line_sequence_" + line.getId());
         if (allocatedSequence > planned) {
-            throw new IllegalArgumentException("This Packing List row has no remaining carton slot: " + alreadyCounted + "/" + planned + ".");
+            throw new IllegalArgumentException(AppMessages.packingListNoRemainingSlot(alreadyCounted, planned));
         }
         entity.setCartonSequence(Math.toIntExact(allocatedSequence));
         entity.setPlannedCartons(planned);
@@ -1177,10 +1165,10 @@ public class CartonLoadingService {
 
         try {
             CartonScanTransaction saved = transactionRepository.save(entity);
-            socketPublisher.cartonLoadingChanged("WAITING_WEIGHT", saved.getId());
+            socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.WAITING_WEIGHT, saved.getId());
             return saved;
         } catch (DuplicateKeyException ex) {
-            throw new IllegalArgumentException("Another carton Job was created at this station at the same time. Reload the station and try again.");
+            throw new IllegalArgumentException(AppMessages.ANOTHER_CARTON_JOB_CREATED);
         }
     }
 
@@ -1206,7 +1194,7 @@ public class CartonLoadingService {
     public CartonScanTransaction get(String buyerCode, String transactionId) {
         String buyer = requireBuyer(buyerCode);
         return transactionRepository.findByIdAndBuyerCode(transactionId, buyer)
-                .orElseThrow(() -> new IllegalArgumentException("Item transaction not found"));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.ITEM_TRANSACTION_NOT_FOUND));
     }
 
     public CartonScanTransaction receivePlcWeight(PlcWeightRequest request) {
@@ -1214,33 +1202,33 @@ public class CartonLoadingService {
         ScaleStation station = stationService.requireActive(stationCode);
         stationService.markOnline(stationCode, "Weight data received");
         if (!Boolean.TRUE.equals(request.stable())) {
-            throw new IllegalArgumentException("Scale value is not stable yet");
+            throw new IllegalArgumentException(AppMessages.SCALE_VALUE_NOT_STABLE);
         }
         BigDecimal weight = requireWeight(request.weightKg(), station);
 
         CartonScanTransaction transaction;
         if (request.jobId() != null) {
             transaction = transactionRepository.findByJobId(request.jobId())
-                    .orElseThrow(() -> new IllegalArgumentException("PLC Job not found: " + request.jobId()));
+                    .orElseThrow(() -> new IllegalArgumentException(AppMessages.plcJobNotFound(request.jobId())));
             if (!stationCode.equals(transaction.getStationCode())) {
-                throw new IllegalArgumentException("PLC Job does not belong to station " + stationCode);
+                throw new IllegalArgumentException(AppMessages.plcJobWrongStation(stationCode));
             }
             if (transaction.getStatus() != CartonScanStatus.WAITING_WEIGHT) {
                 if (transaction.getWeightKg() != null) return transaction;
-                throw new IllegalArgumentException("PLC Job is no longer waiting for weight");
+                throw new IllegalArgumentException(AppMessages.PLC_JOB_NOT_WAITING);
             }
         } else {
             transaction = transactionRepository
                     .findFirstByStationCodeAndStatusOrderByScannedAtDesc(stationCode, CartonScanStatus.WAITING_WEIGHT)
-                    .orElseThrow(() -> new IllegalArgumentException("No item is waiting at station " + stationCode));
+                    .orElseThrow(() -> new IllegalArgumentException(AppMessages.noItemWaitingAtStation(stationCode)));
         }
-        return completeWeight(transaction, weight, request.messageId(), "PLC_GATEWAY", null, WeightSource.PLC.name());
+        return completeWeight(transaction, weight, request.messageId(), AppConstants.SystemActor.PLC_GATEWAY, null, WeightSource.PLC.name());
     }
 
     public CartonScanTransaction manualWeight(String buyerCode, String transactionId, ManualWeightRequest request) {
         CartonScanTransaction transaction = get(buyerCode, transactionId);
         if (transaction.getStatus() != CartonScanStatus.WAITING_WEIGHT) {
-            throw new IllegalArgumentException("Transaction is not waiting for weight");
+            throw new IllegalArgumentException(AppMessages.TRANSACTION_NOT_WAITING);
         }
         ScaleStation station = blank(transaction.getStationCode())
                 ? null
@@ -1248,7 +1236,7 @@ public class CartonLoadingService {
         BigDecimal weight = station == null
                 ? requirePositiveWeight(request.weightKg())
                 : requireWeight(request.weightKg(), station);
-        String reason = required(request.reason(), "Manual input reason is required");
+        String reason = required(request.reason(), AppMessages.MANUAL_INPUT_REASON_REQUIRED);
         return completeWeight(transaction, weight, "MANUAL-" + System.currentTimeMillis(), RequestActor.current(), reason, WeightSource.MANUAL.name());
     }
 
@@ -1268,7 +1256,7 @@ public class CartonLoadingService {
         long warning = transactions.stream().filter(t -> t.getStatus() == CartonScanStatus.WEIGHT_WARNING).count();
         long waiting = transactions.stream().filter(t -> t.getStatus() == CartonScanStatus.WAITING_WEIGHT).count();
         BigDecimal totalWeight = transactions.stream()
-                .filter(t -> COMPLETED_STATUSES.contains(t.getStatus()))
+                .filter(t -> CartonScanStatus.isCompleted(t.getStatus()))
                 .map(CartonScanTransaction::getWeightKg)
                 .filter(value -> value != null)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -1313,7 +1301,7 @@ public class CartonLoadingService {
                 .and("status").is(CartonScanStatus.WAITING_WEIGHT).and("jobId").is(transaction.getJobId())
                 .and("completedAt").is(null).and("shippedAt").is(null)), update,
                 FindAndModifyOptions.options().returnNew(true), CartonScanTransaction.class);
-        if (saved == null) throw new IllegalArgumentException("Weight job changed or was already completed. Refresh before retrying.");
+        if (saved == null) throw new IllegalArgumentException(AppMessages.WEIGHT_JOB_CHANGED);
         socketPublisher.cartonLoadingChanged(saved.getStatus().name(), saved.getId());
         return saved;
     }
@@ -1322,9 +1310,9 @@ public class CartonLoadingService {
         CartonScanTransaction first = rows.get(0);
         long notScanned = rows.stream().filter(row -> row.getStatus() == CartonScanStatus.PLANNED).count();
         long waiting = rows.stream().filter(row -> row.getStatus() == CartonScanStatus.WAITING_WEIGHT).count();
-        long completed = rows.stream().filter(row -> COMPLETED_STATUSES.contains(row.getStatus())).count();
+        long completed = rows.stream().filter(row -> CartonScanStatus.isCompleted(row.getStatus())).count();
         BigDecimal totalWeight = rows.stream()
-                .filter(row -> COMPLETED_STATUSES.contains(row.getStatus()))
+                .filter(row -> CartonScanStatus.isCompleted(row.getStatus()))
                 .map(CartonScanTransaction::getWeightKg)
                 .filter(value -> value != null)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -1337,7 +1325,7 @@ public class CartonLoadingService {
     }
 
     private CartonCandidateResponse candidate(PackingListLine line) {
-        long counted = transactionRepository.countByPackingLineIdAndStatusIn(line.getId(), COUNTED_STATUSES);
+        long counted = transactionRepository.countByPackingLineIdAndStatusIn(line.getId(), CartonScanStatus.countedStatuses());
         long waiting = transactionRepository.countByPackingLineIdAndStatusIn(line.getId(), List.of(CartonScanStatus.WAITING_WEIGHT));
         long completed = Math.max(0, counted - waiting);
         return new CartonCandidateResponse(
@@ -1653,10 +1641,10 @@ public class CartonLoadingService {
 
     private Criteria assignmentCriteria(String value) {
         String clean = clean(value);
-        if (clean == null || FilterValue.ALL.equalsIgnoreCase(clean)) return null;
-        if (FilterValue.ASSIGNED.equalsIgnoreCase(clean)) return assignedBarcodeCriteria();
-        if (FilterValue.UNASSIGNED.equalsIgnoreCase(clean)) return unassignedBarcodeCriteria();
-        throw new IllegalArgumentException("Unsupported assignment filter: " + value);
+        if (clean == null || AppConstants.Filter.ALL.equalsIgnoreCase(clean)) return null;
+        if (AppConstants.Filter.ASSIGNED.equalsIgnoreCase(clean)) return assignedBarcodeCriteria();
+        if (AppConstants.Filter.UNASSIGNED.equalsIgnoreCase(clean)) return unassignedBarcodeCriteria();
+        throw new IllegalArgumentException(AppMessages.unsupportedAssignmentFilter(value));
     }
 
     private Criteria assignedBarcodeCriteria() {
@@ -1726,7 +1714,7 @@ public class CartonLoadingService {
         Shipment claimed = mongoTemplate.findAndModify(Query.query(Criteria.where("_id").is(shipment.getId())
                         .and("buyerCode").is(carton.getBuyerCode()).and("status").is(ShipmentStatus.PLANNED.name())),
                 new Update().set("executionStarted", true), FindAndModifyOptions.options().returnNew(true), Shipment.class);
-        if (claimed == null) throw new IllegalArgumentException("Shipment plan changed. Refresh the Packing inbox.");
+        if (claimed == null) throw new IllegalArgumentException(AppMessages.SHIPMENT_PLAN_CHANGED);
     }
 
     public void requireWeightStageReady(String buyer, String orderId) {
@@ -1734,7 +1722,7 @@ public class CartonLoadingService {
                 .filter(row -> row.getStatus() != CartonScanStatus.CANCELLED)
                 .toList();
         if (cartons.isEmpty()) {
-            throw new IllegalArgumentException("No physical cartons are available. Generate Carton Master before Weight Check.");
+            throw new IllegalArgumentException(AppMessages.NO_PHYSICAL_CARTONS);
         }
 
         boolean weightAlreadyStarted = cartons.stream().anyMatch(this::hasWeightStarted);
@@ -1743,8 +1731,7 @@ public class CartonLoadingService {
         long assigned = cartons.stream().filter(row -> !blank(row.getFactoryBarcode())).count();
         if (assigned < cartons.size()) {
             throw new IllegalArgumentException(
-                    "Weight Check can start after Barcode Assignment is completed (" + assigned + "/" + cartons.size()
-                            + "). Assign all physical cartons first."
+                    AppMessages.weightCheckRequiresBarcodeAssignment(assigned, cartons.size())
             );
         }
     }
@@ -1761,11 +1748,11 @@ public class CartonLoadingService {
 
     private CartonScanStatus parseStatus(String value) {
         String clean = clean(value);
-        if (clean == null || FilterValue.ALL.equalsIgnoreCase(clean)) return null;
+        if (clean == null || AppConstants.Filter.ALL.equalsIgnoreCase(clean)) return null;
         try {
             return CartonScanStatus.valueOf(clean.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("Unsupported item status: " + value);
+            throw new IllegalArgumentException(AppMessages.unsupportedItemStatus(value));
         }
     }
 
@@ -1792,16 +1779,16 @@ public class CartonLoadingService {
 
     private BigDecimal requirePositiveWeight(BigDecimal weight) {
         if (weight == null || weight.signum() <= 0) {
-            throw new IllegalArgumentException("Weight must be greater than 0");
+            throw new IllegalArgumentException(AppMessages.WEIGHT_GREATER_THAN_ZERO);
         }
         return weight;
     }
 
     private BigDecimal requireWeight(BigDecimal weight, ScaleStation station) {
-        if (weight == null || weight.signum() <= 0) throw new IllegalArgumentException("Weight must be greater than 0");
+        if (weight == null || weight.signum() <= 0) throw new IllegalArgumentException(AppMessages.WEIGHT_GREATER_THAN_ZERO);
         BigDecimal minimum = station.getMinimumWeightKg() == null ? new BigDecimal("0.50") : station.getMinimumWeightKg();
         if (weight.compareTo(minimum) < 0) {
-            throw new IllegalArgumentException("Weight is below station minimum " + minimum + " kg");
+            throw new IllegalArgumentException(AppMessages.weightBelowStationMinimum(minimum));
         }
         return weight;
     }
@@ -1817,7 +1804,7 @@ public class CartonLoadingService {
                 "system_counters"
         );
         Number value = counter == null ? null : (Number) counter.get("value");
-        if (value == null) throw new IllegalStateException("Unable to allocate carton Job ID");
+        if (value == null) throw new IllegalStateException(AppMessages.UNABLE_ALLOCATE_CARTON_JOB);
         return value.longValue();
     }
 
@@ -1843,12 +1830,12 @@ public class CartonLoadingService {
 
     private String requireBuyer(String value) {
         String buyer = BuyerAccess.normalize(value);
-        if (buyer.isEmpty()) throw new IllegalArgumentException("Unsupported Buyer: " + value);
+        if (buyer.isEmpty()) throw new IllegalArgumentException(AppMessages.unsupportedBuyer(value));
         return buyer;
     }
 
     private String normalizeStation(String value) {
-        return required(value, "Station code is required").trim().toUpperCase(Locale.ROOT);
+        return required(value, AppMessages.STATION_CODE_REQUIRED).trim().toUpperCase(Locale.ROOT);
     }
 
     private String required(String value, String message) {

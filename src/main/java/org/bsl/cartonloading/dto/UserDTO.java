@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.dto;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
 
@@ -46,7 +47,7 @@ public class UserDTO {
 
     public List<String> getAccessPermissions() { return List.copyOf(accessPermissions); }
     public void setAccessPermissions(List<String> values) {
-        this.accessPermissions = new ArrayList<>(User.normalizeAccessPermissions(values, User.ROLE_ADMIN.equals(getRole())));
+        this.accessPermissions = new ArrayList<>(User.normalizeAccessPermissions(values, AppConstants.Role.ADMIN.equals(getRole())));
     }
 
     public boolean isCanManageSales() { return canManageSales; }
@@ -64,7 +65,7 @@ public class UserDTO {
 
     public List<String> getBuyerPermissions() { return List.copyOf(buyerPermissions); }
     public void setBuyerPermissions(List<String> values) {
-        this.buyerPermissions = new ArrayList<>(BuyerAccess.normalizeAll(values, User.ROLE_ADMIN.equals(getRole())));
+        this.buyerPermissions = new ArrayList<>(BuyerAccess.normalizeAll(values, AppConstants.Role.ADMIN.equals(getRole())));
     }
 
     public List<String> getFactoryPermissions() { return List.copyOf(factoryPermissions); }

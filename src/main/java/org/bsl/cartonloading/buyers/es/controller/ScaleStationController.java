@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.es.controller;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import org.bsl.cartonloading.buyers.es.dto.carton.ScaleStationRequest;
 import org.bsl.cartonloading.buyers.es.dto.carton.StationHeartbeatRequest;
 import org.bsl.cartonloading.buyers.es.model.ScaleStation;
@@ -10,8 +12,8 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/buyers/engelbert-strauss/scale-stations")
-@PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS')")
+@RequestMapping(AppConstants.ApiPath.BARCODE_WORKFLOW_SCALE_STATIONS)
+@PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_ACCESS)
 public class ScaleStationController {
     private final ScaleStationService service;
 
@@ -20,7 +22,7 @@ public class ScaleStationController {
     }
 
     @GetMapping
-    public List<ScaleStation> list(@RequestParam(defaultValue = "true") boolean activeOnly) {
+    public List<ScaleStation> list(@RequestParam(defaultValue = AppConstants.RequestDefault.TRUE) boolean activeOnly) {
         return service.list(activeOnly);
     }
 
@@ -29,19 +31,19 @@ public class ScaleStationController {
         return service.get(stationCode);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.isAdmin())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_ADMIN)
     @PostMapping
     public ScaleStation create(@RequestBody ScaleStationRequest request) {
         return service.create(request);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.isAdmin())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_ADMIN)
     @PutMapping("/{stationCode}")
     public ScaleStation update(@PathVariable String stationCode, @RequestBody ScaleStationRequest request) {
         return service.update(stationCode, request);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer('ENGELBERT_STRAUSS') and (@accessControl.canManageSales() or @accessControl.canWeightCheck())")
+    @PreAuthorize(AppConstants.SecurityExpression.BARCODE_BUYER_SALES_OR_WEIGHT)
     @PostMapping("/{stationCode}/heartbeat")
     public ScaleStation heartbeat(@PathVariable String stationCode, @RequestBody StationHeartbeatRequest request) {
         return service.heartbeat(stationCode, request);

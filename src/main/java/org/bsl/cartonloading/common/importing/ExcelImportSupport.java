@@ -1,6 +1,8 @@
 package org.bsl.cartonloading.common.importing;
 
 import org.apache.poi.ss.usermodel.Cell;
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.CellValue;
 import org.apache.poi.ss.usermodel.DataFormatter;
@@ -26,37 +28,26 @@ import java.util.Locale;
 @Component
 public class ExcelImportSupport {
 
-    private static final long MAX_SIZE_BYTES = 20L * 1024L * 1024L;
-
-    private static final List<DateTimeFormatter> DATE_FORMATTERS = Arrays.asList(
-            DateTimeFormatter.ISO_LOCAL_DATE,
-            DateTimeFormatter.ofPattern("dd/MM/uuuu"),
-            DateTimeFormatter.ofPattern("d/M/uuuu"),
-            DateTimeFormatter.ofPattern("dd-MM-uuuu"),
-            DateTimeFormatter.ofPattern("d-M-uuuu"),
-            DateTimeFormatter.ofPattern("MM/dd/uuuu"),
-            DateTimeFormatter.ofPattern("M/d/uuuu")
-    );
 
     private final DataFormatter formatter = new DataFormatter(Locale.US);
 
     public Workbook openWorkbook(MultipartFile file) {
         if (file == null || file.isEmpty()) {
-            throw new ImportValidationException("Excel file is required");
+            throw new ImportValidationException(AppMessages.EXCEL_FILE_REQUIRED);
         }
-        if (file.getSize() > MAX_SIZE_BYTES) {
-            throw new ImportValidationException("Excel file must not exceed 20 MB");
+        if (file.getSize() > AppConstants.Importing.MAX_EXCEL_SIZE_BYTES) {
+            throw new ImportValidationException(AppMessages.EXCEL_FILE_TOO_LARGE);
         }
 
         String name = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(Locale.ROOT);
-        if (!name.endsWith(".xlsx") && !name.endsWith(".xls")) {
-            throw new ImportValidationException("Only .xlsx or .xls files are supported");
+        if (!name.endsWith(AppConstants.Importing.EXCEL_EXTENSION_XLSX) && !name.endsWith(AppConstants.Importing.EXCEL_EXTENSION_XLS)) {
+            throw new ImportValidationException(AppMessages.EXCEL_FILE_TYPE_UNSUPPORTED);
         }
 
         try {
             return WorkbookFactory.create(file.getInputStream());
         } catch (IOException ex) {
-            throw new ImportValidationException("Cannot read Excel file: " + ex.getMessage());
+            throw new ImportValidationException(AppMessages.cannotReadExcel(ex.getMessage()));
         }
     }
 
@@ -67,7 +58,7 @@ public class ExcelImportSupport {
                 return sheet;
             }
         }
-        throw new ImportValidationException("Excel does not contain required sheet: " + expectedSheetName);
+        throw new ImportValidationException(AppMessages.requiredExcelSheet(expectedSheetName));
     }
 
     public FormulaEvaluator evaluator(Workbook workbook) {
@@ -77,7 +68,7 @@ public class ExcelImportSupport {
     public void requireHeaders(Sheet sheet, FormulaEvaluator evaluator, HeaderRequirement... requirements) {
         Row headerRow = sheet.getRow(sheet.getFirstRowNum());
         if (headerRow == null) {
-            throw new ImportValidationException("Sheet " + sheet.getSheetName() + " does not have a header row");
+            throw new ImportValidationException(AppMessages.sheetHeaderRequired(sheet.getSheetName()));
         }
 
         for (HeaderRequirement requirement : requirements) {
@@ -89,10 +80,12 @@ public class ExcelImportSupport {
 
             if (!matched) {
                 throw new ImportValidationException(
-                        "Invalid header at column " + excelColumn(requirement.columnIndex())
-                                + " in sheet " + sheet.getSheetName()
-                                + ". Expected " + String.join(" / ", requirement.acceptedHeaders())
-                                + ", received " + (actual == null ? "blank" : "'" + actual + "'")
+                        AppMessages.invalidExcelHeader(
+                                excelColumn(requirement.columnIndex()),
+                                sheet.getSheetName(),
+                                String.join(" / ", requirement.acceptedHeaders()),
+                                actual == null ? "blank" : "'" + actual + "'"
+                        )
                 );
             }
         }
@@ -238,14 +231,14 @@ public class ExcelImportSupport {
             return null;
         }
 
-        for (DateTimeFormatter formatter : DATE_FORMATTERS) {
+        for (DateTimeFormatter formatter : dateFormatters()) {
             try {
                 return LocalDate.parse(raw, formatter);
             } catch (DateTimeParseException ignored) {
                 // Try the next supported format.
             }
         }
-        throw new ImportValidationException("Invalid date '" + raw + "' in column " + excelColumn(columnIndex));
+        throw new ImportValidationException(AppMessages.invalidExcelDate(raw, excelColumn(columnIndex)));
     }
 
     public String excelColumn(int zeroBasedIndex) {
@@ -277,7 +270,7 @@ public class ExcelImportSupport {
             }
             return new BigDecimal(normalized);
         } catch (NumberFormatException ex) {
-            throw new ImportValidationException("Invalid number '" + raw + "' in column " + column);
+            throw new ImportValidationException(AppMessages.invalidExcelNumber(raw, column));
         }
     }
 
@@ -299,4 +292,13 @@ public class ExcelImportSupport {
             return acceptedHeaders;
         }
     }
+    private List<DateTimeFormatter> dateFormatters() {
+        List<DateTimeFormatter> formatters = new java.util.ArrayList<>();
+        formatters.add(DateTimeFormatter.ISO_LOCAL_DATE);
+        for (String pattern : AppConstants.Importing.DATE_PATTERNS) {
+            formatters.add(DateTimeFormatter.ofPattern(pattern));
+        }
+        return formatters;
+    }
+
 }

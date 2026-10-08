@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -13,7 +14,7 @@ import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
-@Document(collection = "packing_allocation_lines")
+@Document(collection = AppConstants.Collection.PACKING_ALLOCATION_LINES)
 public class PackingAllocationLine {
     @Id
     private String id;

@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
@@ -31,20 +33,6 @@ import java.util.List;
 
 @Service
 public class OrderPackingExcelExportService {
-    private static final String[] MASTER_HEADERS = {
-            "ACTION", "KEY", "Supplier name", "e.s. Supplier #", "Production facility", "Container #", "Mode of shipment",
-            "ETD", "ETA", "e.s. PO #", "e.s. Article #", "STYLE#", "STYLE", "Color", "Size",
-            "Qty Per Ctn", "Invoice #", "Total pcs", "Total ctns", "Pcs AIR", "Ctns AIR", "Pcs SEA",
-            "Ctns SEA", "CBM AIR", "KG AIR", "STATUS", "Open PO QTY / Overdel", "Remarks", "YO Lot#",
-            "H CTN", "CBM CTN"
-    };
-
-    private static final String[] PACKING_HEADERS = {
-            "C/T From", "C/T To", "CTNS Qty", "P.O. #", "Style #", "Style", "Art.no.", "Color", "Size",
-            "Qty/CTN", "Total PCS", "Ctn Meas", "CBM", "Gross Weight (kg)", "Net Weight (kg)",
-            "Actual Weight (kg)", "Remarks"
-    };
-
     private final PackingOrderService orderService;
     private final PackingAllocationLineRepository masterRepository;
     private final PackingListLineRepository packingRepository;
@@ -66,13 +54,13 @@ public class OrderPackingExcelExportService {
                 .toList();
 
         try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            Sheet sheet = workbook.createSheet("ALLOCATION");
+            Sheet sheet = workbook.createSheet(AppConstants.Excel.ALLOCATION_SHEET);
             CellStyle headerStyle = headerStyle(workbook);
             CellStyle dateStyle = dateStyle(workbook);
             Row header = sheet.createRow(0);
-            for (int i = 0; i < MASTER_HEADERS.length; i++) {
+            for (int i = 0; i < AppConstants.ExcelExport.MASTER_HEADERS.size(); i++) {
                 Cell cell = header.createCell(i);
-                cell.setCellValue(MASTER_HEADERS[i]);
+                cell.setCellValue(AppConstants.ExcelExport.MASTER_HEADERS.get(i));
                 cell.setCellStyle(headerStyle);
             }
 
@@ -80,7 +68,7 @@ public class OrderPackingExcelExportService {
             for (PackingAllocationLine line : lines) {
                 Row row = sheet.createRow(rowIndex++);
                 int c = 0;
-                text(row, c++, "UPDATE");
+                text(row, c++, AppConstants.ExcelAction.UPDATE);
                 text(row, c++, line.getId());
                 text(row, c++, line.getSupplierName());
                 text(row, c++, line.getSupplierNumber());
@@ -115,16 +103,16 @@ public class OrderPackingExcelExportService {
 
             for (int i = 0; i < 20; i++) {
                 Row row = sheet.createRow(rowIndex++);
-                row.createCell(0).setCellValue("CREATE");
+                row.createCell(0).setCellValue(AppConstants.ExcelAction.CREATE);
             }
             addActionValidation(sheet, Math.max(5000, rowIndex + 100));
             sheet.createFreezePane(2, 1);
             setMasterWidths(sheet);
-            sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, Math.max(0, rowIndex - 1), 0, MASTER_HEADERS.length - 1));
+            sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, Math.max(0, rowIndex - 1), 0, AppConstants.ExcelExport.MASTER_HEADERS.size() - 1));
             workbook.write(output);
             return output.toByteArray();
         } catch (IOException ex) {
-            throw new IllegalStateException("Cannot export Order Items: " + ex.getMessage(), ex);
+            throw new IllegalStateException(AppMessages.cannotExport(AppConstants.ExportSubject.ORDER_ITEMS, ex.getMessage()), ex);
         }
     }
 
@@ -135,14 +123,14 @@ public class OrderPackingExcelExportService {
                 .toList();
 
         try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            Sheet sheet = workbook.createSheet("PACKING LIST");
+            Sheet sheet = workbook.createSheet(AppConstants.Excel.PACKING_LIST_SHEET);
             CellStyle titleStyle = titleStyle(workbook);
             CellStyle labelStyle = labelStyle(workbook);
             CellStyle headerStyle = headerStyle(workbook);
 
-            sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, PACKING_HEADERS.length - 1));
+            sheet.addMergedRegion(new org.apache.poi.ss.util.CellRangeAddress(0, 0, 0, AppConstants.ExcelExport.PACKING_HEADERS.size() - 1));
             Cell title = sheet.createRow(0).createCell(0);
-            title.setCellValue("PACKING LIST");
+            title.setCellValue(AppConstants.Excel.PACKING_LIST_SHEET);
             title.setCellStyle(titleStyle);
 
             Row info1 = sheet.createRow(2);
@@ -168,9 +156,9 @@ public class OrderPackingExcelExportService {
             info2.createCell(7).setCellValue(safe(order.getProductionFacility()));
 
             Row header = sheet.createRow(5);
-            for (int i = 0; i < PACKING_HEADERS.length; i++) {
+            for (int i = 0; i < AppConstants.ExcelExport.PACKING_HEADERS.size(); i++) {
                 Cell cell = header.createCell(i);
-                cell.setCellValue(PACKING_HEADERS[i]);
+                cell.setCellValue(AppConstants.ExcelExport.PACKING_HEADERS.get(i));
                 cell.setCellStyle(headerStyle);
             }
 
@@ -216,11 +204,11 @@ public class OrderPackingExcelExportService {
 
             sheet.createFreezePane(0, 6);
             setPackingWidths(sheet);
-            sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(5, Math.max(5, rowIndex - 1), 0, PACKING_HEADERS.length - 1));
+            sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(5, Math.max(5, rowIndex - 1), 0, AppConstants.ExcelExport.PACKING_HEADERS.size() - 1));
             workbook.write(output);
             return output.toByteArray();
         } catch (IOException ex) {
-            throw new IllegalStateException("Cannot export Packing List: " + ex.getMessage(), ex);
+            throw new IllegalStateException(AppMessages.cannotExport(AppConstants.ExportSubject.PACKING_LIST, ex.getMessage()), ex);
         }
     }
 
@@ -268,10 +256,10 @@ public class OrderPackingExcelExportService {
 
     private void addActionValidation(Sheet sheet, int lastRow) {
         DataValidationHelper helper = sheet.getDataValidationHelper();
-        DataValidationConstraint constraint = helper.createExplicitListConstraint(new String[]{"CREATE", "UPDATE", "DELETE"});
+        DataValidationConstraint constraint = helper.createExplicitListConstraint(new String[]{AppConstants.ExcelAction.CREATE, AppConstants.ExcelAction.UPDATE, AppConstants.ExcelAction.DELETE});
         DataValidation validation = helper.createValidation(constraint, new CellRangeAddressList(1, lastRow, 0, 0));
         validation.setShowErrorBox(true);
-        validation.createErrorBox("Invalid ACTION", "Use CREATE, UPDATE or DELETE only.");
+        validation.createErrorBox(AppMessages.INVALID_ACTION_TITLE, AppMessages.INVALID_ACTION_HELP);
         validation.createPromptBox("ACTION", "CREATE = add, UPDATE = edit by KEY, DELETE = remove by KEY.");
         validation.setShowPromptBox(true);
         sheet.addValidationData(validation);

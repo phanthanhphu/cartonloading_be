@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.config;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
+
 import org.bsl.cartonloading.support.ApiErrorPayloadNormalizer;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
@@ -47,7 +49,7 @@ public class ApiErrorNormalizerAdvice implements ResponseBodyAdvice<Object> {
         if (payload == null) return body;
         HttpStatus knownStatus = HttpStatus.resolve(status);
         return ApiErrorPayloadNormalizer.normalize(payload, status,
-                knownStatus == null ? "Request failed" : knownStatus.getReasonPhrase());
+                knownStatus == null ? AppMessages.REQUEST_FAILED : knownStatus.getReasonPhrase());
     }
 
     private boolean isJson(MediaType type) {

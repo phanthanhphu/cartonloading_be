@@ -5,13 +5,14 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
-@Document(collection = "packing_list_lines")
+@Document(collection = AppConstants.Collection.PACKING_LIST_LINES)
 public class PackingListLine {
     @Id
     private String id;

@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.security;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
@@ -34,7 +35,7 @@ public class JwtUtil {
             Collection<String> buyerPermissions
     ) {
         String normalizedRole = User.normalizeRole(role);
-        List<String> normalizedPermissions = User.normalizeAccessPermissions(accessPermissions, User.ROLE_ADMIN.equals(normalizedRole));
+        List<String> normalizedPermissions = User.normalizeAccessPermissions(accessPermissions, AppConstants.Role.ADMIN.equals(normalizedRole));
         List<String> normalizedBuyers = org.bsl.cartonloading.model.BuyerAccess.normalizeAll(
                 buyerPermissions,
                 false
@@ -53,11 +54,11 @@ public class JwtUtil {
     }
 
     public String generateToken(String email, String role, long tokenVersion) {
-        return generateToken(email, role, tokenVersion, List.of(User.ACCESS_VIEW_SYSTEM));
+        return generateToken(email, role, tokenVersion, List.of(AppConstants.Permission.VIEW_SYSTEM));
     }
 
     public String generateToken(String email, String role) {
-        return generateToken(email, role, 1L, List.of(User.ACCESS_VIEW_SYSTEM));
+        return generateToken(email, role, 1L, List.of(AppConstants.Permission.VIEW_SYSTEM));
     }
 
     public boolean validateToken(String token) {

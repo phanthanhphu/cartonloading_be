@@ -1,6 +1,7 @@
 package org.bsl.cartonloading.controller;
 
 import jakarta.validation.Valid;
+import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.es.dto.PackingOrderRequest;
 import org.bsl.cartonloading.buyers.es.dto.PackingOrderResponse;
 import org.bsl.cartonloading.dto.management.CartonManagementRow;
@@ -30,7 +31,7 @@ public class OrderManagementController {
                                              @RequestParam(required = false) String supplier,
                                              @RequestParam(required = false) String createdBy,
                                              @RequestParam(required = false) String status,
-                                             @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="25") int size) {
+                                             @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listOrders(buyer, orderDate, orderName, factory, supplier, createdBy, status, page, size);
     }
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
@@ -51,7 +52,7 @@ public class OrderManagementController {
             @RequestParam(required=false) String style, @RequestParam(required=false) String sku,
             @RequestParam(required=false) String destination, @RequestParam(required=false) String status,
             @RequestParam(required=false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate exFtyDate,
-            @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="25") int size) {
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listPos(buyer, orderId, poNumber, factory, style, sku, destination, status, exFtyDate, page, size);
     }
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
@@ -65,7 +66,7 @@ public class OrderManagementController {
             @PathVariable String orderId, @PathVariable String poKey,
             @RequestParam(required=false) String cartonNo, @RequestParam(required=false) String sscc,
             @RequestParam(required=false) String status,
-            @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="25") int size) {
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listCartons(buyer, orderId, poKey, cartonNo, sscc, status, page, size);
     }
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
@@ -81,7 +82,7 @@ public class OrderManagementController {
             @RequestParam(required=false) String style, @RequestParam(required=false) String color,
             @RequestParam(required=false) String sizeValue, @RequestParam(required=false) String status,
             @RequestParam(required=false) String scannedBy,
-            @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="25") int size) {
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listItems(buyer, orderId, cartonId, itemNo, sku, style, color, sizeValue, status, scannedBy, page, size);
     }
 }

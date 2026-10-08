@@ -3,10 +3,11 @@ package org.bsl.cartonloading.model;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.time.LocalDateTime;
 
-@Document(collection = "audit_logs")
+@Document(collection = AppConstants.Collection.AUDIT_LOGS)
 public class AuditLog {
 
     @Id

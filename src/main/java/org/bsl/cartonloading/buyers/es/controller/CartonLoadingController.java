@@ -1,6 +1,7 @@
 package org.bsl.cartonloading.buyers.es.controller;
 
-import org.bsl.cartonloading.common.constants.FilterValue;
+import org.bsl.cartonloading.common.constants.AppMessages;
+import org.bsl.cartonloading.common.constants.AppConstants;
 
 import org.bsl.cartonloading.buyers.es.dto.carton.*;
 import org.bsl.cartonloading.buyers.es.dto.barcode.BarcodeAssignmentPageResponse;
@@ -16,7 +17,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/carton-loading")
+@RequestMapping(AppConstants.ApiPath.CARTON_LOADING)
 public class CartonLoadingController {
     private final CartonLoadingService service;
 
@@ -25,30 +26,30 @@ public class CartonLoadingController {
     }
 
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
     @PostMapping("/{buyer}/orders/{orderId}/cartons/generate")
     public CartonPlanGenerationResult generateCartonsFromWsp(
             @PathVariable String buyer,
             @PathVariable String orderId,
-            @RequestParam(defaultValue = "true") boolean replace
+            @RequestParam(defaultValue = AppConstants.RequestDefault.TRUE) boolean replace
     ) {
         return service.generateFromWsp(buyer, orderId, replace);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping("/{buyer}/orders/{orderId}/cartons")
     public Page<CartonScanTransaction> listCartons(
             @PathVariable String buyer,
             @PathVariable String orderId,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String status,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.LARGE_PAGE_SIZE) int size
     ) {
         return service.listCartons(buyer, orderId, keyword, status, page, size);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer)")
     @GetMapping("/{buyer}/orders/{orderId}/items/{masterLineId}/cartons")
     public List<CartonScanTransaction> listCartonsForItem(
             @PathVariable String buyer,
@@ -58,20 +59,20 @@ public class CartonLoadingController {
         return service.listCartonsForItem(buyer, orderId, masterLineId);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
     @GetMapping("/{buyer}/orders/{orderId}/barcode-assignment/cartons")
     public BarcodeAssignmentPageResponse listCartonsForBarcodeAssignment(
             @PathVariable String buyer,
             @PathVariable String orderId,
             @RequestParam(required = false) String keyword,
-            @RequestParam(defaultValue = FilterValue.UNASSIGNED) String assignment,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size
+            @RequestParam(defaultValue = AppConstants.Filter.UNASSIGNED) String assignment,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page,
+            @RequestParam(defaultValue = AppConstants.RequestDefault.LARGE_PAGE_SIZE) int size
     ) {
         return service.listCartonsForBarcodeAssignment(buyer, orderId, keyword, assignment, page, size);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
     @GetMapping("/{buyer}/orders/{orderId}/barcode-assignment/check/{barcode}")
     public FactoryBarcode checkFactoryBarcodeForAssignment(
             @PathVariable String buyer,
@@ -81,7 +82,7 @@ public class CartonLoadingController {
         return service.checkFactoryBarcodeForAssignment(buyer, orderId, barcode);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
     @PostMapping("/{buyer}/orders/{orderId}/barcode-assignment")
     public CartonScanTransaction assignFactoryBarcode(
             @PathVariable String buyer,
@@ -91,7 +92,7 @@ public class CartonLoadingController {
         return service.assignFactoryBarcode(buyer, orderId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canAssignBarcode()")
     @DeleteMapping("/{buyer}/orders/{orderId}/barcode-assignment/cartons/{cartonId}")
     public CartonScanTransaction unassignFactoryBarcode(
             @PathVariable String buyer,
@@ -101,7 +102,7 @@ public class CartonLoadingController {
         return service.unassignFactoryBarcode(buyer, orderId, cartonId);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.isAdmin()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.isAdmin()")
     @PostMapping("/{buyer}/orders/{orderId}/cartons/{cartonId}/reset-weight")
     public CartonScanTransaction resetCartonWeight(
             @PathVariable String buyer,
@@ -112,7 +113,7 @@ public class CartonLoadingController {
         return service.resetCartonWeight(buyer, orderId, cartonId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/orders/{orderId}/factory-barcode/scan")
     public CartonScanTransaction scanAssignedFactoryBarcode(
             @PathVariable String buyer,
@@ -122,7 +123,7 @@ public class CartonLoadingController {
         return service.scanAssignedFactoryBarcode(buyer, orderId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/orders/{orderId}/items/scan-lookup")
     public CartonItemLookupResponse lookupGeneratedItems(
             @PathVariable String buyer,
@@ -136,17 +137,17 @@ public class CartonLoadingController {
      * Zebra USB HID flow: match the QA code and atomically reserve the next PLANNED carton.
      * No Android/mobile camera page and no manual carton selection are required.
      */
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/orders/{orderId}/scan-next")
     public CartonScanTransaction scanNextFromZebra(
             @PathVariable String buyer,
             @PathVariable String orderId,
             @RequestBody ZebraScanRequest request
     ) {
-        throw new IllegalArgumentException("Legacy QA scanning is retired. Scan the assigned Factory Barcode using factory-barcode/scan.");
+        throw new IllegalArgumentException(AppMessages.LEGACY_QA_RETIRED);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/orders/{orderId}/cartons/{cartonId}/manual-complete")
     public CartonScanTransaction completePlannedCartonManually(
             @PathVariable String buyer,
@@ -154,10 +155,10 @@ public class CartonLoadingController {
             @PathVariable String cartonId,
             @RequestBody CartonManualCompleteRequest request
     ) {
-        throw new IllegalArgumentException("Use assigned Factory Barcode scanning and manual-weight, or the manual inspection workflow.");
+        throw new IllegalArgumentException(AppMessages.MANUAL_WEIGHT_WORKFLOW_REQUIRED);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/orders/{orderId}/cartons/{cartonId}/scan")
     public CartonScanTransaction scanPlannedCarton(
             @PathVariable String buyer,
@@ -165,10 +166,10 @@ public class CartonLoadingController {
             @PathVariable String cartonId,
             @RequestBody CartonPlanScanRequest request
     ) {
-        throw new IllegalArgumentException("Scan the assigned Factory Barcode using factory-barcode/scan.");
+        throw new IllegalArgumentException(AppMessages.SCAN_ASSIGNED_FACTORY_BARCODE);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/orders/{orderId}/lookup")
     public CartonLookupResponse lookup(
             @PathVariable String buyer,
@@ -178,17 +179,17 @@ public class CartonLoadingController {
         return service.lookup(buyer, orderId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/orders/{orderId}/transactions")
     public CartonScanTransaction start(
             @PathVariable String buyer,
             @PathVariable String orderId,
             @RequestBody CartonStartRequest request
     ) {
-        throw new IllegalArgumentException("Scan the assigned Factory Barcode using factory-barcode/scan.");
+        throw new IllegalArgumentException(AppMessages.SCAN_ASSIGNED_FACTORY_BARCODE);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @GetMapping("/{buyer}/stations/{stationCode}/current")
     public CartonScanTransaction current(
             @PathVariable String buyer,
@@ -197,7 +198,7 @@ public class CartonLoadingController {
         return service.current(buyer, stationCode);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @GetMapping("/{buyer}/transactions/{transactionId}")
     public CartonScanTransaction get(
             @PathVariable String buyer,
@@ -206,7 +207,7 @@ public class CartonLoadingController {
         return service.get(buyer, transactionId);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @PostMapping("/{buyer}/transactions/{transactionId}/manual-weight")
     public CartonScanTransaction manualWeight(
             @PathVariable String buyer,
@@ -216,7 +217,7 @@ public class CartonLoadingController {
         return service.manualWeight(buyer, transactionId, request);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @GetMapping("/{buyer}/orders/{orderId}/progress")
     public CartonProgressResponse progress(
             @PathVariable String buyer,
@@ -225,7 +226,7 @@ public class CartonLoadingController {
         return service.progress(buyer, orderId);
     }
 
-    @PreAuthorize("@esBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@barcodeWorkflowBuyerGuard.matches(#buyer) and @accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
     @GetMapping("/{buyer}/orders/{orderId}/recent")
     public List<CartonScanTransaction> recent(
             @PathVariable String buyer,

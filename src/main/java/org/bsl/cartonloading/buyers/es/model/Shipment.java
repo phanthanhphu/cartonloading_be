@@ -4,12 +4,13 @@ import lombok.Data;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.bsl.cartonloading.common.constants.AppConstants;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
 @Data
-@Document(collection = "carton_shipments")
+@Document(collection = AppConstants.Collection.SHIPMENTS)
 public class Shipment {
     @Id private String id;
     private String buyerCode;

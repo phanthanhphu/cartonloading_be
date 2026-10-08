@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.service;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.dto.admin.DepartmentRequest;
 import org.bsl.cartonloading.model.Department;
 import org.bsl.cartonloading.repository.DepartmentRepository;
@@ -47,10 +49,10 @@ public class DepartmentAdminService {
 
     public Department create(DepartmentRequest request) {
         String factory = factory(request.factory());
-        String division = required(request.division(), "Division is required");
-        String name = required(request.departmentName(), "Department name is required");
+        String division = required(request.division(), AppMessages.DIVISION_REQUIRED);
+        String name = required(request.departmentName(), AppMessages.DEPARTMENT_NAME_REQUIRED);
         if (repository.findByFactoryIgnoreCaseAndDivisionIgnoreCaseAndDepartmentNameIgnoreCase(factory, division, name).isPresent()) {
-            throw new IllegalArgumentException("Department already exists for this Factory and Division");
+            throw new IllegalArgumentException(AppMessages.DEPARTMENT_ALREADY_EXISTS);
         }
         Department row = new Department();
         row.setFactory(factory);
@@ -59,44 +61,44 @@ public class DepartmentAdminService {
         row.setCreatedAt(LocalDateTime.now());
         row.setUpdatedAt(row.getCreatedAt());
         Department saved = repository.save(row);
-        audit.log(RequestActor.current(), "CREATE", "DEPARTMENT", saved.getId(), label(saved), null, null);
+        audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.DEPARTMENT, saved.getId(), label(saved), null, null);
         return saved;
     }
 
     public Department update(String id, DepartmentRequest request) {
-        Department row = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Department not found"));
+        Department row = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(AppMessages.DEPARTMENT_NOT_FOUND));
         String factory = factory(request.factory());
-        String division = required(request.division(), "Division is required");
-        String name = required(request.departmentName(), "Department name is required");
+        String division = required(request.division(), AppMessages.DIVISION_REQUIRED);
+        String name = required(request.departmentName(), AppMessages.DEPARTMENT_NAME_REQUIRED);
         repository.findByFactoryIgnoreCaseAndDivisionIgnoreCaseAndDepartmentNameIgnoreCase(factory, division, name)
                 .filter(other -> !other.getId().equals(id))
-                .ifPresent(other -> { throw new IllegalArgumentException("Department already exists for this Factory and Division"); });
+                .ifPresent(other -> { throw new IllegalArgumentException(AppMessages.DEPARTMENT_ALREADY_EXISTS); });
         row.setFactory(factory);
         row.setDivision(division);
         row.setDepartmentName(name);
         row.setUpdatedAt(LocalDateTime.now());
         Department saved = repository.save(row);
-        audit.log(RequestActor.current(), "UPDATE", "DEPARTMENT", saved.getId(), label(saved), null, null);
+        audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.DEPARTMENT, saved.getId(), label(saved), null, null);
         return saved;
     }
 
     public void delete(String id) {
-        if (!repository.existsById(id)) throw new IllegalArgumentException("Department not found");
+        if (!repository.existsById(id)) throw new IllegalArgumentException(AppMessages.DEPARTMENT_NOT_FOUND);
         if (userRepository.existsByDepartmentId(id)) {
-            throw new IllegalArgumentException("Department is assigned to one or more users");
+            throw new IllegalArgumentException(AppMessages.DEPARTMENT_ASSIGNED_TO_USERS);
         }
-        Department row = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Department not found"));
+        Department row = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(AppMessages.DEPARTMENT_NOT_FOUND));
         repository.deleteById(id);
-        audit.log(RequestActor.current(), "DELETE", "DEPARTMENT", id, label(row), null, null);
+        audit.log(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.DEPARTMENT, id, label(row), null, null);
     }
 
     private String label(Department row) {
-        return (row.getFactory() == null ? "—" : row.getFactory()) + " / " + row.getDivision() + " / " + row.getDepartmentName();
+        return AppMessages.departmentAuditLabel(row.getFactory(), row.getDivision(), row.getDepartmentName());
     }
 
     private String factory(String value) {
-        String v = required(value, "Factory is required").toUpperCase(Locale.ROOT);
-        if (!v.matches("F[1-7]")) throw new IllegalArgumentException("Factory must be F1 to F7");
+        String v = required(value, AppMessages.FACTORY_REQUIRED).toUpperCase(Locale.ROOT);
+        if (!v.matches("F[1-7]")) throw new IllegalArgumentException(AppMessages.FACTORY_RANGE_F1_F7);
         return v;
     }
 

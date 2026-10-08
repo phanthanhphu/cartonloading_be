@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.handler;
 
+import org.bsl.cartonloading.common.constants.AppMessages;
 import jakarta.validation.ConstraintViolationException;
 import org.bsl.cartonloading.common.importing.ImportValidationException;
 import org.bsl.cartonloading.common.exception.WorkflowNotFoundException;
@@ -39,7 +40,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> handleMethodArgumentNotValid(MethodArgumentNotValidException ex) {
-        ApiError body = new ApiError(HttpStatus.BAD_REQUEST.value(), "Validation failed");
+        ApiError body = new ApiError(HttpStatus.BAD_REQUEST.value(), AppMessages.VALIDATION_FAILED);
         Map<String, String> fields = new LinkedHashMap<>();
         for (FieldError fieldError : ex.getBindingResult().getFieldErrors()) {
             fields.put(fieldError.getField(), fieldError.getDefaultMessage());
@@ -55,7 +56,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiError> handleMaxUpload(MaxUploadSizeExceededException ex) {
-        return json(HttpStatus.PAYLOAD_TOO_LARGE, new ApiError(HttpStatus.PAYLOAD_TOO_LARGE.value(), "Uploaded Excel file is too large"));
+        return json(HttpStatus.PAYLOAD_TOO_LARGE, new ApiError(HttpStatus.PAYLOAD_TOO_LARGE.value(), AppMessages.UPLOADED_EXCEL_TOO_LARGE));
     }
 
     @ExceptionHandler(AsyncRequestNotUsableException.class)
@@ -70,7 +71,7 @@ public class GlobalExceptionHandler {
             return null;
         }
         logger.error("I/O error: {}", ex.getMessage(), ex);
-        return json(HttpStatus.INTERNAL_SERVER_ERROR, new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.value(), "I/O error occurred"));
+        return json(HttpStatus.INTERNAL_SERVER_ERROR, new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.value(), AppMessages.IO_ERROR_OCCURRED));
     }
 
     @ExceptionHandler(Exception.class)
@@ -80,7 +81,7 @@ public class GlobalExceptionHandler {
             return null;
         }
         logger.error("Unexpected error: {}", ex.getMessage(), ex);
-        return json(HttpStatus.INTERNAL_SERVER_ERROR, new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Unexpected error occurred"));
+        return json(HttpStatus.INTERNAL_SERVER_ERROR, new ApiError(HttpStatus.INTERNAL_SERVER_ERROR.value(), AppMessages.UNEXPECTED_ERROR_OCCURRED));
     }
 
     private ResponseEntity<ApiError> json(HttpStatus status, ApiError error) {

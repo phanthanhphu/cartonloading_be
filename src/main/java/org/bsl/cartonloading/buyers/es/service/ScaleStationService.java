@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.service.RequestActor;
 import org.bsl.cartonloading.buyers.es.dto.carton.ScaleStationRequest;
 import org.bsl.cartonloading.buyers.es.dto.carton.StationHeartbeatRequest;
@@ -14,8 +16,6 @@ import java.util.Locale;
 
 @Service
 public class ScaleStationService {
-    private static final BigDecimal DEFAULT_MINIMUM_WEIGHT = new BigDecimal("0.50");
-    private static final BigDecimal DEFAULT_TOLERANCE = new BigDecimal("0.02");
 
     private final ScaleStationRepository repository;
 
@@ -29,19 +29,19 @@ public class ScaleStationService {
 
     public ScaleStation get(String stationCode) {
         return repository.findByStationCode(normalizeCode(stationCode))
-                .orElseThrow(() -> new IllegalArgumentException("Scale station not found: " + stationCode));
+                .orElseThrow(() -> new IllegalArgumentException(AppMessages.scaleStationNotFound(stationCode)));
     }
 
     public ScaleStation requireActive(String stationCode) {
         ScaleStation station = get(stationCode);
-        if (!station.isActive()) throw new IllegalArgumentException("Scale station is inactive: " + station.getStationCode());
+        if (!station.isActive()) throw new IllegalArgumentException(AppMessages.scaleStationInactive(station.getStationCode()));
         return station;
     }
 
     public ScaleStation create(ScaleStationRequest request) {
         String code = normalizeCode(request.stationCode());
         if (repository.existsByStationCode(code)) {
-            throw new IllegalArgumentException("Scale station code already exists: " + code);
+            throw new IllegalArgumentException(AppMessages.scaleStationCodeExists(code));
         }
         LocalDateTime now = LocalDateTime.now();
         ScaleStation station = new ScaleStation();
@@ -59,7 +59,7 @@ public class ScaleStationService {
         ScaleStation station = get(stationCode);
         String requestedCode = normalizeCode(request.stationCode());
         if (!station.getStationCode().equals(requestedCode) && repository.existsByStationCode(requestedCode)) {
-            throw new IllegalArgumentException("Scale station code already exists: " + requestedCode);
+            throw new IllegalArgumentException(AppMessages.scaleStationCodeExists(requestedCode));
         }
         station.setStationCode(requestedCode);
         apply(station, request);
@@ -74,7 +74,7 @@ public class ScaleStationService {
         station.setStatusMessage(clean(request.message()));
         station.setLastHeartbeatAt(LocalDateTime.now());
         station.setUpdatedAt(LocalDateTime.now());
-        station.setUpdatedBy("PLC_GATEWAY");
+        station.setUpdatedBy(AppConstants.SystemActor.PLC_GATEWAY);
         return repository.save(station);
     }
 
@@ -83,13 +83,13 @@ public class ScaleStationService {
     }
 
     private void apply(ScaleStation station, ScaleStationRequest request) {
-        station.setStationName(required(request.stationName(), "Station name is required"));
+        station.setStationName(required(request.stationName(), AppMessages.STATION_NAME_REQUIRED));
         station.setPlcIp(clean(request.plcIp()));
         station.setGatewayIp(clean(request.gatewayIp()));
         station.setLocation(clean(request.location()));
         station.setActive(request.active() == null || request.active());
-        station.setMinimumWeightKg(positiveOrDefault(request.minimumWeightKg(), DEFAULT_MINIMUM_WEIGHT));
-        station.setStabilityToleranceKg(positiveOrDefault(request.stabilityToleranceKg(), DEFAULT_TOLERANCE));
+        station.setMinimumWeightKg(positiveOrDefault(request.minimumWeightKg(), AppConstants.Scale.DEFAULT_MINIMUM_WEIGHT));
+        station.setStabilityToleranceKg(positiveOrDefault(request.stabilityToleranceKg(), AppConstants.Scale.DEFAULT_TOLERANCE));
     }
 
     private BigDecimal positiveOrDefault(BigDecimal value, BigDecimal fallback) {
@@ -97,11 +97,11 @@ public class ScaleStationService {
     }
 
     private String normalizeCode(String value) {
-        String clean = required(value, "Station code is required")
+        String clean = required(value, AppMessages.STATION_CODE_REQUIRED)
                 .toUpperCase(Locale.ROOT)
                 .replaceAll("[^A-Z0-9_-]+", "-")
                 .replaceAll("^-+|-+$", "");
-        if (clean.isBlank()) throw new IllegalArgumentException("Station code is required");
+        if (clean.isBlank()) throw new IllegalArgumentException(AppMessages.STATION_CODE_REQUIRED);
         return clean;
     }
 

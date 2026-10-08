@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.es.service;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.service.RequestActor;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.Row;
@@ -40,9 +42,6 @@ import java.util.stream.Collectors;
 
 @Service
 public class PackingListLineService {
-    private static final String MASTER_NAME = "ENGELBERT_STRAUSS_PACKING_LIST";
-    private static final int FIRST_DATA_ROW = 11;
-    private static final int LAST_SIZE_COLUMN = 36; // AK
 
     private final PackingListLineRepository repository;
     private final PackingAllocationLineRepository masterRepository;
@@ -103,7 +102,7 @@ public class PackingListLineService {
     public PackingListLine get(String buyerCode, String orderId, String lineId) {
         PackingOrder order = orderService.getEntity(buyerCode, orderId);
         return repository.findByIdAndOrderIdAndBuyerCode(lineId, order.getId(), order.getBuyerCode())
-                .orElseThrow(() -> new WorkflowNotFoundException("Packing List row not found"));
+                .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.PACKING_LIST_ROW_NOT_FOUND));
     }
 
     public PackingListLine create(String buyerCode, String orderId, PackingListLineRequest request) {
@@ -202,7 +201,7 @@ public class PackingListLineService {
     public SpreadsheetImportResult upload(String buyerCode, String orderId, MultipartFile file, ImportMode mode) {
         PackingOrder order = orderService.getEntity(buyerCode, orderId);
         if (cartonLoadingService.hasGeneratedPlan(buyerCode, orderId)) {
-            throw new WorkflowValidationException("Bulk import is locked after Carton Master generation. Edit individual rows before operations start, or create a new Order.");
+            throw new WorkflowValidationException(AppMessages.BULK_IMPORT_LOCKED_AFTER_CARTON_MASTER);
         }
         ImportMode effectiveMode = mode == null ? ImportMode.CREATE_ONLY : mode;
         List<ImportRowError> errors = new ArrayList<>();
@@ -219,7 +218,7 @@ public class PackingListLineService {
             FormulaEvaluator evaluator = excelSupport.evaluator(workbook);
             validatePackingHeader(sheet, evaluator);
 
-            for (int rowIndex = FIRST_DATA_ROW; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+            for (int rowIndex = AppConstants.PackingImport.PACKING_LIST_FIRST_DATA_ROW; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
                 Row row = sheet.getRow(rowIndex);
                 if (row == null) continue;
                 String po = clean(excelSupport.text(row, 4, evaluator));
@@ -239,18 +238,18 @@ public class PackingListLineService {
         } catch (ImportValidationException ex) {
             errors.add(new ImportRowError(1, "file", cleanMessage(ex)));
         } catch (Exception ex) {
-            errors.add(new ImportRowError(1, "file", "Cannot import Packing List: " + cleanMessage(ex)));
+            errors.add(new ImportRowError(1, "file", AppMessages.cannotImportPackingList(cleanMessage(ex))));
         }
 
         if (candidates.isEmpty() && errors.isEmpty()) {
-            errors.add(new ImportRowError(1, "file", "The Packing List sheet does not contain data rows"));
+            errors.add(new ImportRowError(1, "file", AppMessages.PACKING_LIST_IMPORT_EMPTY));
         }
         if (!errors.isEmpty()) {
-            return SpreadsheetImportResult.rejected(MASTER_NAME, effectiveMode, totalRows, errors);
+            return SpreadsheetImportResult.rejected(AppConstants.PackingImport.PACKING_LIST_DATASET, effectiveMode, totalRows, errors);
         }
 
         SpreadsheetImportResult result = new SpreadsheetImportResult();
-        result.setDataset(MASTER_NAME);
+        result.setDataset(AppConstants.PackingImport.PACKING_LIST_DATASET);
         result.setMode(effectiveMode);
         result.setApplied(true);
         result.setTotalRows(totalRows);
@@ -328,7 +327,7 @@ public class PackingListLineService {
     }
 
     private SizeValue readSizeValue(Sheet sheet, Row row, FormulaEvaluator evaluator) {
-        for (int column = 9; column <= LAST_SIZE_COLUMN; column++) {
+        for (int column = 9; column <= AppConstants.PackingImport.PACKING_LIST_LAST_SIZE_COLUMN; column++) {
             BigDecimal value = excelSupport.decimal(row, column, evaluator);
             if (positive(value)) {
                 String label = firstNonBlank(
@@ -349,12 +348,12 @@ public class PackingListLineService {
             if (sheet.getSheetName().trim().equalsIgnoreCase("SEA")) return sheet;
         }
         if (workbook.getNumberOfSheets() > 0) return workbook.getSheetAt(0);
-        throw new ImportValidationException("Excel does not contain a Packing List sheet");
+        throw new ImportValidationException(AppMessages.PACKING_LIST_SHEET_REQUIRED);
     }
 
     private void validatePackingHeader(Sheet sheet, FormulaEvaluator evaluator) {
         Row header = sheet.getRow(8);
-        if (header == null) throw new ImportValidationException("Packing List header row was not found");
+        if (header == null) throw new ImportValidationException(AppMessages.PACKING_LIST_HEADER_NOT_FOUND);
         requireHeader(header, 0, evaluator, "CTNO");
         requireHeader(header, 3, evaluator, "CTNSQTY");
         requireHeader(header, 4, evaluator, "PO");
@@ -369,8 +368,10 @@ public class PackingListLineService {
         String actual = TextNormalizer.headerKey(excelSupport.text(row, column, evaluator));
         if (actual == null || !actual.startsWith(expectedPrefix)) {
             throw new ImportValidationException(
-                    "Invalid Packing List header at column " + excelSupport.excelColumn(column)
-                            + ". Received '" + excelSupport.text(row, column, evaluator) + "'"
+                    AppMessages.invalidPackingListHeader(
+                            excelSupport.excelColumn(column),
+                            excelSupport.text(row, column, evaluator)
+                    )
             );
         }
     }
@@ -491,14 +492,14 @@ public class PackingListLineService {
     }
 
     private void validate(PackingListLineRequest request) {
-        requiredNumber(request.cartonsQty(), "CTNS Qty is required");
-        required(request.poNumber(), "P.O. # is required");
-        required(request.styleNumber(), "Style # is required");
-        required(request.articleNumber(), "Art.no. is required");
-        required(request.color(), "Color is required");
-        required(request.size(), "Size is required");
-        requiredNumber(request.qtyPerCarton(), "Qty/CTN is required");
-        requiredNumber(request.totalPcs(), "Total PCS is required");
+        requiredNumber(request.cartonsQty(), AppMessages.CTNS_QTY_REQUIRED);
+        required(request.poNumber(), AppMessages.PO_HASH_REQUIRED);
+        required(request.styleNumber(), AppMessages.STYLE_HASH_REQUIRED);
+        required(request.articleNumber(), AppMessages.ARTICLE_NO_REQUIRED);
+        required(request.color(), AppMessages.COLOR_REQUIRED);
+        required(request.size(), AppMessages.SIZE_REQUIRED);
+        requiredNumber(request.qtyPerCarton(), AppMessages.QTY_CTN_REQUIRED);
+        requiredNumber(request.totalPcs(), AppMessages.TOTAL_PCS_REQUIRED);
     }
 
     private int nextLineNo(PackingOrder order) {
@@ -576,7 +577,7 @@ public class PackingListLineService {
 
     private String cleanMessage(Throwable ex) {
         String message = ex == null ? null : ex.getMessage();
-        return message == null || message.isBlank() ? "Invalid data" : message;
+        return message == null || message.isBlank() ? AppMessages.INVALID_DATA : message;
     }
 
     private record SizeValue(String label, BigDecimal quantity) {
