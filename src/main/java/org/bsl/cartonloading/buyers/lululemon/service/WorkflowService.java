@@ -11,13 +11,14 @@ import org.bsl.cartonloading.buyers.lululemon.dto.*;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
 import org.bsl.cartonloading.buyers.lululemon.model.CartonItem;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
-import org.bsl.cartonloading.buyers.lululemon.model.PrintRequest;
 import org.bsl.cartonloading.buyers.lululemon.model.ScanEvent;
+import org.bsl.cartonloading.buyers.lululemon.model.ShippingSchedule;
 import org.bsl.cartonloading.buyers.lululemon.model.WeighingResult;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonItemRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.ScanEventRepository;
+import org.bsl.cartonloading.buyers.lululemon.repository.ShippingScheduleRepository;
 import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.buyers.es.model.PackingOrder;
@@ -54,6 +55,7 @@ public class WorkflowService {
     private final CartonRepository cartonRepository;
     private final CartonItemRepository itemRepository;
     private final ScanEventRepository scanEventRepository;
+    private final ShippingScheduleRepository shippingScheduleRepository;
     private final PackingOrderService orderService;
     private final ExcelImportSupport excelSupport;
     private final BuyerFactoryAccessService factoryAccess;
@@ -66,6 +68,7 @@ public class WorkflowService {
             CartonRepository cartonRepository,
             CartonItemRepository itemRepository,
             ScanEventRepository scanEventRepository,
+            ShippingScheduleRepository shippingScheduleRepository,
             PackingOrderService orderService,
             ExcelImportSupport excelSupport,
             BuyerFactoryAccessService factoryAccess,
@@ -77,6 +80,7 @@ public class WorkflowService {
         this.cartonRepository = cartonRepository;
         this.itemRepository = itemRepository;
         this.scanEventRepository = scanEventRepository;
+        this.shippingScheduleRepository = shippingScheduleRepository;
         this.orderService = orderService;
         this.excelSupport = excelSupport;
         this.factoryAccess = factoryAccess;
@@ -86,6 +90,16 @@ public class WorkflowService {
     }
 
     public ImportResult importAllBp(String buyerCode, String orderId, MultipartFile file, boolean replace) {
+        return importAllBpInternal(buyerCode, orderId, file, replace, false);
+    }
+
+    /** Sales master file: incremental upsert, never delete PO/carton/scan data or reset ownership. */
+    public ImportResult importSharedAllBp(String buyerCode, String orderId, MultipartFile file) {
+        return importAllBpInternal(buyerCode, orderId, file, false, true);
+    }
+
+    private synchronized ImportResult importAllBpInternal(String buyerCode, String orderId, MultipartFile file,
+                                                           boolean replace, boolean sharedImport) {
         PackingOrder order = requireOrder(buyerCode, orderId);
         List<ParsedPo> parsed;
         List<String> warnings = new ArrayList<>();
@@ -174,28 +188,97 @@ public class WorkflowService {
         }
 
         if (parsed.isEmpty()) throw new IllegalArgumentException(AppMessages.ALL_BP_EMPTY);
-        if (!replace && !poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON).isEmpty()) {
+        if (!replace && !sharedImport && !poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON).isEmpty()) {
             throw new IllegalArgumentException(AppMessages.buyerDataAlreadyExists(AppConstants.Buyer.LULULEMON));
         }
-        if (replace) assertReplaceAllowed(orderId);
+        if (replace && !sharedImport) {
+            // Safety invariant: legacy Replace cannot destroy PO picks.
+            boolean hasPicked = poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON)
+                    .stream().anyMatch(po -> po.getPickedBy() != null && !po.getPickedBy().isBlank());
+            if (hasPicked) throw new IllegalArgumentException("Picked PO exists: use Sales shared import, not Replace.");
+            assertReplaceAllowed(orderId);
+        }
 
-        if (replace) {
-            scanEventRepository.deleteByOrderIdAndBuyerCode(orderId, AppConstants.Buyer.LULULEMON);
-            itemRepository.deleteByOrderIdAndBuyerCode(orderId, AppConstants.Buyer.LULULEMON);
-            cartonRepository.deleteByOrderIdAndBuyerCode(orderId, AppConstants.Buyer.LULULEMON);
-            poRepository.deleteByOrderIdAndBuyerCode(orderId, AppConstants.Buyer.LULULEMON);
+        // Safety first: legacy destructive Replace could delete valid scan/carton records
+        // before a later save fails. Production re-imports must use the incremental
+        // shared import path; it preserves all operational records.
+        if (replace && !sharedImport && !poRepository
+                .findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON).isEmpty()) {
+            throw new IllegalArgumentException("Destructive All_BP Replace is disabled to protect carton/scan data. Use Sales Shared Import instead.");
         }
 
         LocalDateTime now = LocalDateTime.now();
         String actor = RequestActor.current();
         List<PurchaseOrder> poBatch = new ArrayList<>(parsed.size());
-
+        Map<AllBpBusinessKey, PurchaseOrder> existing = new HashMap<>();
+        if (sharedImport) {
+            for (PurchaseOrder previous : poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON)) {
+                PurchaseOrder duplicate = existing.putIfAbsent(AllBpBusinessKey.from(previous), previous);
+                if (duplicate != null) throw new IllegalArgumentException("Duplicate existing PO business key: " + previous.getPoNumber());
+            }
+        }
+        Map<String, PurchaseOrder> previouslyPicked = new HashMap<>();
+        if (sharedImport) {
+            for (PurchaseOrder row : existing.values()) {
+                if (row.getPickedBy() != null && !row.getPickedBy().isBlank())
+                    previouslyPicked.putIfAbsent(row.getPoNumber(), row);
+            }
+        }
+        int createdCount = 0;
+        int updatedCount = 0;
         for (ParsedPo parsedPo : parsed) {
+            PurchaseOrder previous = sharedImport ? existing.get(AllBpBusinessKey.from(parsedPo)) : null;
+            if (previous != null) {
+                // Do not mutate carton plans after Cartons/Scans/RFID/Shipping activity.
+                boolean busy = previous.getSku() != null && !previous.getSku().isBlank()
+                        || !cartonRepository.findByPoIdOrderByCartonNoAsc(previous.getId()).isEmpty()
+                        || shippingScheduleRepository.findByOrderIdAndBuyerCodeOrderByExFtyDateAscCreatedAtDesc(
+                            orderId, AppConstants.Buyer.LULULEMON).stream().anyMatch(s -> s.getPoIds() != null && s.getPoIds().contains(previous.getId()));
+                if (busy || !AppConstants.PurchaseOrderStatus.NOT_STARTED.equals(previous.getStatus())) {
+                    warnings.add("PO " + parsedPo.poNumber() + " already has operational data; existing values and assignment were retained.");
+                    continue;
+                }
+                // Only source columns are updated atomically. Crucially, never write the
+                // imported snapshot over factoryCode/pickedBy/pickedAt during a concurrent Pick.
+                Query sourceQuery = Query.query(Criteria.where("_id").is(previous.getId())
+                        .and("orderId").is(orderId).and("buyerCode").is(AppConstants.Buyer.LULULEMON)
+                        .and("status").is(AppConstants.PurchaseOrderStatus.NOT_STARTED).and("sku").is(null));
+                Update sourceUpdate = new Update()
+                        .set("buyer_key", AppConstants.Buyer.LULULEMON)
+                        .set("sourceRowNumber", parsedPo.sourceLineNo())
+                        .set("dcCode", parsedPo.dcCode()).set("destination", parsedPo.destination())
+                        .set("channel", parsedPo.channel()).set("masterPo", parsedPo.masterPo())
+                        .set("packingPlan", parsedPo.packingPlan()).set("salesOrderPts", parsedPo.salesOrderPts())
+                        .set("style", parsedPo.styleNumber()).set("description", parsedPo.description())
+                        .set("color", parsedPo.color()).set("size", parsedPo.size())
+                        .set("plannedTotalQty", parsedPo.totalQty()).set("pcsPerCarton", parsedPo.qtyPerCarton())
+                        .set("plannedCartons", parsedPo.cartonCount()).set("remainderQty", parsedPo.remainderQty())
+                        .set("cartonPlannedQuantities", parsedPo.cartonPlannedQuantities())
+                        .set("shipMode", parsedPo.shipMode()).set("season", parsedPo.season())
+                        .set("fwd", parsedPo.fwd()).set("cartonBoxSize", parsedPo.cartonBoxSize())
+                        .set("netWeightKg", parsedPo.netWeight()).set("grossWeightKg", parsedPo.grossWeight())
+                        .set("allBpHeaders", sourceHeaderLabels).set("allBpRows", parsedPo.allBpRows())
+                        .set("updatedBy", actor).set("updatedAt", now);
+                if (mongoTemplate.updateFirst(sourceQuery, sourceUpdate, PurchaseOrder.class).getMatchedCount() == 0) {
+                    warnings.add("PO " + parsedPo.poNumber() + " changed while importing; it was skipped.");
+                } else updatedCount++;
+                continue;
+            }
             PurchaseOrder po = new PurchaseOrder();
             po.setBuyerCode(AppConstants.Buyer.LULULEMON);
             po.setOrderId(orderId);
             po.setSourceLineNo(parsedPo.sourceLineNo());
-            po.setFactoryCode(parsedPo.factoryCode());
+            // Once a Packing picked a PO, Sales import must never change its Factory.
+            if (previous == null || (previous.getPickedBy() == null && previous.getFactoryCode() == null)) {
+                po.setFactoryCode(sharedImport ? null : parsedPo.factoryCode());
+            }
+            po.setBuyerKey(AppConstants.Buyer.LULULEMON);
+            if (previous == null && sharedImport && previouslyPicked.containsKey(parsedPo.poNumber())) {
+                PurchaseOrder owner = previouslyPicked.get(parsedPo.poNumber());
+                po.setFactoryCode(owner.getFactoryCode());
+                po.setPickedBy(owner.getPickedBy());
+                po.setPickedAt(owner.getPickedAt());
+            }
             po.setDcCode(parsedPo.dcCode());
             po.setDestination(parsedPo.destination());
             po.setChannel(parsedPo.channel());
@@ -222,8 +305,9 @@ public class WorkflowService {
             po.setAllBpRows(List.copyOf(parsedPo.allBpRows()));
             po.setStatus(AppConstants.PurchaseOrderStatus.NOT_STARTED);
             po.setCreatedBy(actor);
-            po.setUpdatedBy(actor);
             po.setCreatedAt(now);
+            createdCount++;
+            po.setUpdatedBy(actor);
             po.setUpdatedAt(now);
             poBatch.add(po);
         }
@@ -231,9 +315,10 @@ public class WorkflowService {
 
         warnings.add("Lazy generation enabled: import creates PO records only. Cartons are generated when a PO is opened; Items are generated when a Carton is opened.");
         audit(AppConstants.AuditAction.ALL_BP_IMPORT, orderId,
-                "Imported " + parsed.size() + " PO(s) from All_BP. Carton/Item generation is deferred until the user opens them.");
+                sharedImport ? "Imported " + createdCount + " new / updated " + updatedCount + " existing PO(s) from All_BP."
+                        : "Imported " + parsed.size() + " PO(s) from All_BP. Carton/Item generation is deferred until the user opens them.");
         socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.ALL_BP_IMPORTED, orderId);
-        return new ImportResult(true, parsed.size(), 0, 0, 0, warnings);
+        return new ImportResult(true, createdCount, 0, 0, updatedCount, warnings);
     }
 
     public Page<PoSummary> listPos(String buyerCode, String orderId, String keyword, String status, int page, int size) {
@@ -283,7 +368,10 @@ public class WorkflowService {
     public PoDetailResponse getPo(String buyerCode, String orderId, String poId) {
         requireOrder(buyerCode, orderId);
         PurchaseOrder po = requirePo(orderId, poId);
-        assertFactoryAccessIfPresent(po.getFactoryCode());
+        if (!canAccessFactoryOrUnassigned(po.getFactoryCode())
+                && !factoryAccess.canAccessWeighingFactory(po.getFactoryCode())) {
+            throw new org.springframework.security.access.AccessDeniedException("Factory access denied");
+        }
         List<Carton> cartons = ensureCartonsGenerated(po);
         return new PoDetailResponse(po, cartons);
     }
@@ -302,8 +390,33 @@ public class WorkflowService {
         requireOrder(buyerCode, orderId);
         PurchaseOrder po = requirePo(orderId, poId);
         assertFactoryAccessIfPresent(po.getFactoryCode());
-        assertImportedPoMutable(po);
+        // Picking does not lock Sales edits. The actual lock is completed weighing.
+        assertPoWeighingNotCompleted(po);
         if (request == null) throw new IllegalArgumentException(AppMessages.PO_DATA_REQUIRED);
+
+        // Retain operational identity and all carton/scan data after Packing or dispatch.
+        // Non-structural ALL_BP metadata edits remain available until Weight completes.
+        boolean picked = clean(po.getPickedBy()) != null;
+        boolean operational = hasPoOperationalActivity(po) || isAssignedToAnySchedule(po);
+        String originalNumber = po.getPoNumber();
+        String originalFactory = normalizeFactory(po.getFactoryCode());
+        String originalStyle = po.getStyleNumber();
+        String originalMasterPo = po.getMasterPo();
+        String originalDc = po.getDcCode();
+        String originalDestination = po.getDestination();
+        String originalChannel = po.getChannel();
+        String originalPackingPlan = po.getPackingPlan();
+        String originalSalesOrderPts = po.getSalesOrderPts();
+        String originalShipMode = po.getShipMode();
+        String originalCartonBoxSize = po.getCartonBoxSize();
+        Integer originalQty = po.getTotalQty();
+        Integer originalPcs = po.getQtyPerCarton();
+        List<Integer> originalPlan = po.getCartonPlannedQuantities() == null ? List.of() : List.copyOf(po.getCartonPlannedQuantities());
+        String originalColor = po.getColor();
+        String originalSize = po.getSize();
+        Double originalNetWeight = po.getNetWeightKg();
+        Double originalGrossWeight = po.getGrossWeightKg();
+        LocalDate originalExFty = po.getExFtyDate();
 
         List<Carton> generatedBeforeEdit = cartonRepository.findByPoIdOrderByCartonNoAsc(poId);
         boolean hadGeneratedCartons = !generatedBeforeEdit.isEmpty();
@@ -395,6 +508,34 @@ public class WorkflowService {
                     throw new IllegalArgumentException(AppMessages.allBpBusinessKeyAlreadyExists(poNumber));
                 });
 
+        // Claim ownership is keyed by PO Number and Factory, not row ID. Never
+        // silently move a picked PO into another claim (or change its number).
+        if (picked && (!Objects.equals(originalNumber, poNumber)
+                || !Objects.equals(originalFactory, factoryCode))) {
+            throw new IllegalArgumentException("A picked PO cannot change PO Number or Factory. Other fields remain editable until Weight completes.");
+        }
+        if (operational && (!Objects.equals(originalNumber, poNumber)
+                || !Objects.equals(originalFactory, factoryCode)
+                || !Objects.equals(originalStyle, style)
+                || !Objects.equals(originalMasterPo, po.getMasterPo())
+                || !Objects.equals(originalDc, po.getDcCode())
+                || !Objects.equals(originalDestination, po.getDestination())
+                || !Objects.equals(originalChannel, po.getChannel())
+                || !Objects.equals(originalPackingPlan, po.getPackingPlan())
+                || !Objects.equals(originalSalesOrderPts, po.getSalesOrderPts())
+                || !Objects.equals(originalShipMode, po.getShipMode())
+                || !Objects.equals(originalCartonBoxSize, po.getCartonBoxSize())
+                || !Objects.equals(originalQty, totalQty)
+                || !Objects.equals(originalPcs, qtyPerCarton)
+                || !Objects.equals(originalPlan, plannedQuantities)
+                || !Objects.equals(originalColor, po.getColor())
+                || !Objects.equals(originalSize, po.getSize())
+                || !Objects.equals(originalNetWeight, po.getNetWeightKg())
+                || !Objects.equals(originalGrossWeight, po.getGrossWeightKg())
+                || !Objects.equals(originalExFty, request.exFtyDate()))) {
+            throw new IllegalArgumentException("Packing/Shipment has started: edit descriptive ALL_BP fields only. PO identity, plan, shipping keys, SKU attributes, weights, Factory and Ex-Factory date must stay unchanged to preserve cartons and shipment history.");
+        }
+
         po.setPoNumber(poNumber);
         po.setFactoryCode(factoryCode);
         po.setStyleNumber(style);
@@ -404,29 +545,27 @@ public class WorkflowService {
         po.setRemainderQty(remainder);
         po.setCartonPlannedQuantities(List.copyOf(plannedQuantities));
         po.setExFtyDate(request.exFtyDate());
-        po.setStatus(AppConstants.PurchaseOrderStatus.NOT_STARTED);
+        if (!operational) po.setStatus(AppConstants.PurchaseOrderStatus.NOT_STARTED);
         po.setUpdatedBy(RequestActor.current());
         po.setUpdatedAt(LocalDateTime.now());
 
         PurchaseOrder saved = poRepository.save(po);
 
-        // Remove every derived record created from the old source values.
-        itemRepository.deleteByPoId(poId);
-        cartonRepository.deleteByPoId(poId);
-        scanEventRepository.deleteByPoId(poId);
-
-        // Preserve lazy generation for untouched POs, but if the user had already generated
-        // children, rebuild them now so Carton/Item screens immediately reflect the edit.
-        if (hadGeneratedCartons) {
-            List<Carton> regenerated = ensureCartonsGenerated(saved);
-            if (hadGeneratedItems) {
-                regenerated.forEach(this::ensureItemsGenerated);
+        if (!operational) {
+            // No packing or shipment data: a full plan edit can safely regenerate children.
+            itemRepository.deleteByPoId(poId);
+            cartonRepository.deleteByPoId(poId);
+            scanEventRepository.deleteByPoId(poId);
+            if (hadGeneratedCartons) {
+                List<Carton> regenerated = ensureCartonsGenerated(saved);
+                if (hadGeneratedItems) regenerated.forEach(this::ensureItemsGenerated);
             }
         }
 
         audit(AppConstants.AuditAction.PO_UPDATE, poId,
                 "Updated imported PO " + saved.getPoNumber()
-                        + ". ALL_BP formulas were recalculated and generated Carton/Item data was refreshed.");
+                        + (operational ? ". Preserved operational Cartons/Items and shipment references."
+                                : ". ALL_BP formulas recalculated; unstarted Carton/Item data refreshed."));
         socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.PO_UPDATED, poId);
         return saved;
     }
@@ -439,7 +578,14 @@ public class WorkflowService {
         requireOrder(buyerCode, orderId);
         PurchaseOrder po = requirePo(orderId, poId);
         assertFactoryAccessIfPresent(po.getFactoryCode());
+        // Deletion is intentionally stricter than editing: a picked PO has a
+        // claim used by Packing and may not be deleted until it is unpicked.
+        assertPoWeighingNotCompleted(po);
+        if (clean(po.getPickedBy()) != null) {
+            throw new IllegalArgumentException("Unpick this PO before deleting it.");
+        }
         assertImportedPoMutable(po);
+        assertPoNotAssignedToOpenSchedule(po);
 
         String poNumber = po.getPoNumber();
         itemRepository.deleteByPoId(poId);
@@ -1109,7 +1255,8 @@ public class WorkflowService {
         LinkedHashMap<String, Carton> matchedCartons = new LinkedHashMap<>();
         LinkedHashMap<String, PurchaseOrder> matchedPos = new LinkedHashMap<>();
 
-        cartonRepository.findBySscc18(raw).ifPresent(carton -> {
+        String canonicalSscc = SsccNormalizer.normalize(raw);
+        if (canonicalSscc != null) cartonRepository.findBySscc18(canonicalSscc).ifPresent(carton -> {
             if (orderId.equals(carton.getOrderId()) && AppConstants.Buyer.LULULEMON.equals(carton.getBuyerCode()) && canAccessFactoryOrUnassigned(carton.getFactoryCode())) {
                 matchedCartons.put(carton.getId(), carton);
             }
@@ -1366,6 +1513,45 @@ public class WorkflowService {
                 .orElseThrow(() -> new IllegalArgumentException(AppMessages.entityNotFound(AppConstants.Buyer.LULULEMON + " carton")));
     }
 
+    private void assertPoNotAssignedToOpenSchedule(PurchaseOrder po) {
+        List<ShippingSchedule> blockingSchedules = shippingScheduleRepository
+                .findByOrderIdAndBuyerCodeOrderByExFtyDateAscCreatedAtDesc(po.getOrderId(), AppConstants.Buyer.LULULEMON).stream()
+                .filter(schedule -> !"COMPLETED".equals(schedule.getStatus()))
+                .filter(schedule -> schedule.getPoIds() != null && schedule.getPoIds().contains(po.getId()))
+                .toList();
+        if (blockingSchedules.isEmpty()) return;
+
+        ShippingSchedule schedule = blockingSchedules.get(0);
+        throw new IllegalArgumentException("PO " + po.getPoNumber()
+                + " is already assigned to Shipping Schedule " + schedule.getScheduleNo()
+                + ". Reassign or remove it from Shipping Schedule before editing or deleting this PO.");
+    }
+
+    private void assertPoWeighingNotCompleted(PurchaseOrder po) {
+        List<Carton> cartons = cartonRepository.findByPoIdOrderByCartonNoAsc(po.getId());
+        if (AppConstants.WeighingSessionStatus.COMPLETED.equals(po.getWeighingSessionStatus())
+                || po.getWeighingCompletedAt() != null
+                || (!cartons.isEmpty() && cartons.stream().allMatch(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())))) {
+            throw new IllegalArgumentException("This PO has completed Carton Weight and is locked from Sales edits.");
+        }
+    }
+
+    private boolean isAssignedToAnySchedule(PurchaseOrder po) {
+        return shippingScheduleRepository
+                .findByOrderIdAndBuyerCodeOrderByExFtyDateAscCreatedAtDesc(po.getOrderId(), AppConstants.Buyer.LULULEMON).stream()
+                .anyMatch(s -> s.getPoIds() != null && s.getPoIds().contains(po.getId()));
+    }
+
+    private boolean hasPoOperationalActivity(PurchaseOrder po) {
+        List<Carton> cartons = cartonRepository.findByPoIdOrderByCartonNoAsc(po.getId());
+        return clean(po.getSku()) != null || cartons.stream().anyMatch(c ->
+                safeInt(c.getScannedQty()) > 0 || clean(c.getSscc()) != null
+                        || c.getStartedAt() != null || c.getFinishedAt() != null
+                        || c.getLabelConfirmedAt() != null || c.getSsccAssignedAt() != null
+                        || c.getWeighedAt() != null || clean(c.getWeightStatus()) != null
+                        || (clean(c.getStatus()) != null && !AppConstants.CartonStatus.READY_TO_PACK.equals(c.getStatus())));
+    }
+
     private void assertImportedPoMutable(PurchaseOrder po) {
         List<Carton> cartons = cartonRepository.findByPoIdOrderByCartonNoAsc(po.getId());
         boolean operationalActivity = clean(po.getSku()) != null || cartons.stream().anyMatch(carton ->
@@ -1381,13 +1567,6 @@ public class WorkflowService {
             throw new IllegalArgumentException(AppMessages.PO_OPERATION_LOCKED);
         }
 
-        Query handoffQuery = Query.query(Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
-                .and("orderId").is(po.getOrderId())
-                .and("status").in(AppConstants.PrintRequestStatus.SENT, AppConstants.PrintRequestStatus.PENDING, AppConstants.PrintRequestStatus.PRINTING, AppConstants.PrintRequestStatus.PRINTED_SENT_TO_PACKING)
-                .and("pos.poId").is(po.getId()));
-        if (mongoTemplate.exists(handoffQuery, PrintRequest.class)) {
-            throw new IllegalArgumentException(AppMessages.PO_HANDOFF_LOCKED);
-        }
     }
 
     private void assertReplaceAllowed(String orderId) {
@@ -1398,13 +1577,6 @@ public class WorkflowService {
                 .anyMatch(carton -> safeInt(carton.getScannedQty()) > 0 || clean(carton.getSscc()) != null
                         || !AppConstants.CartonStatus.READY_TO_PACK.equals(carton.getStatus()));
         if (started) {
-            throw new IllegalArgumentException(AppMessages.ALL_BP_REPLACE_LOCKED);
-        }
-        Query printQuery = Query.query(Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
-                .and("orderId").is(orderId)
-                .and("status").in(AppConstants.PrintRequestStatus.SENT, AppConstants.PrintRequestStatus.PENDING,
-                        AppConstants.PrintRequestStatus.PRINTING, AppConstants.PrintRequestStatus.PRINTED_SENT_TO_PACKING));
-        if (mongoTemplate.exists(printQuery, PrintRequest.class)) {
             throw new IllegalArgumentException(AppMessages.ALL_BP_REPLACE_LOCKED);
         }
     }
@@ -1853,12 +2025,10 @@ public class WorkflowService {
     private String normalizeSscc(String value) {
         String clean = clean(value);
         if (clean == null) return null;
-        String normalized = clean.replaceAll("\\D", "");
-        if (normalized.isEmpty()) return null;
-        if (normalized.length() != 18) {
-            throw new IllegalArgumentException(AppMessages.SSCC_LENGTH_INVALID);
-        }
-        return normalized;
+        String normalized = SsccNormalizer.normalize(clean);
+        if (normalized != null) return normalized;
+        if (clean.replaceAll("\\D", "").isEmpty()) return null;
+        throw new IllegalArgumentException(AppMessages.SSCC_LENGTH_INVALID);
     }
 
     private String normalizeFactory(String value) {

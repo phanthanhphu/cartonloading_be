@@ -145,11 +145,9 @@ public class CartonCheckingService {
                 }
             }
             case "SSCC" -> {
-                // GS1 AI (00) and common scanner symbology prefix are accepted.
-                String sscc = value.replaceFirst("^\\]C1", "").replaceFirst("^\\(00\\)", "").trim();
-                if (sscc.matches("00[0-9]{18}")) sscc = sscc.substring(2);
-                if (!sscc.matches("[0-9]{18}")) {
-                    throw new IllegalArgumentException("SSCC must contain exactly 18 digits (GS1 (00) prefix is supported).");
+                String sscc = SsccNormalizer.normalize(value);
+                if (sscc == null) {
+                    throw new IllegalArgumentException("SSCC requires 18 digits or GS1 AI (00) followed by 18 digits.");
                 }
                 cartonRepository.findBySscc18(sscc).ifPresent(carton -> {
                     if (sameOrder(orderId, carton.getOrderId()) && BUYER.equals(carton.getBuyerCode())
@@ -227,7 +225,8 @@ public class CartonCheckingService {
                 carton.getPlannedQty(), carton.getStatus(), identified(carton),
                 latestStillApplies ? last.getResult() : null,
                 latestStillApplies ? last.getCheckedBy() : null,
-                latestStillApplies ? last.getCheckedAt() : null);
+                latestStillApplies ? last.getCheckedAt() : null,
+                carton.getLabelConfirmedBy(), carton.getLabelConfirmedAt());
     }
 
     private boolean loadOrderName(String orderId, Map<String, String> names) {

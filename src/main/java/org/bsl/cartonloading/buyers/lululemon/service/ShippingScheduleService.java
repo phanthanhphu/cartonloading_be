@@ -61,14 +61,18 @@ public class ShippingScheduleService {
                 .stream()
                 // Sales/Admin see every schedule. Operational users only see schedules
                 // explicitly assigned to one of their Factory permissions (F1/F2/...).
-                .filter(schedule -> factoryAccess.canAccessAssignedFactory(schedule.getFactoryCode()))
+                .filter(schedule -> factoryAccess.canAccessAssignedFactory(schedule.getFactoryCode())
+                        || factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode()))
                 .map(this::summary).toList();
     }
 
     public ShippingScheduleDetail detail(String buyerCode, String orderId, String scheduleId) {
         requireOrder(buyerCode, orderId);
         ShippingSchedule schedule = requireSchedule(orderId, scheduleId);
-        assertScheduleFactory(schedule);
+        if (!factoryAccess.canAccessAssignedFactory(schedule.getFactoryCode())
+                && !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) {
+            throw new org.springframework.security.access.AccessDeniedException("Factory access denied");
+        }
         return buildDetail(schedule);
     }
 
@@ -78,8 +82,15 @@ public class ShippingScheduleService {
         requireOrder(buyerCode, orderId);
         String factory = normalizeFactory(request == null ? null : request.factoryCode());
         if (factory == null) throw new IllegalArgumentException("Select a Factory for this Shipping Schedule.");
+        // Packing may only dispatch shipments for explicitly assigned factories.
+        // Validate on the server; filtering the Factory dropdown is not authorization.
+        factoryAccess.assertAssignedFactoryAccess(factory);
         if (request == null || request.exFtyDate() == null) throw new IllegalArgumentException("Ex-Factory Date is required.");
 
+        String shippingName = request.shippingName() == null ? "" : request.shippingName().trim();
+        if (shippingName.isEmpty() || shippingName.length() > 80) {
+            throw new IllegalArgumentException("Shipment Name is required (max 80 characters).");
+        }
         LinkedHashSet<String> poIds = new LinkedHashSet<>(request.poIds() == null ? List.of() : request.poIds());
         poIds.removeIf(id -> clean(id) == null);
         if (poIds.isEmpty()) throw new IllegalArgumentException("Select at least one logical PO for the Shipping Schedule.");
@@ -89,17 +100,76 @@ public class ShippingScheduleService {
                 .stream().filter(s -> !COMPLETED.equals(s.getStatus())).toList();
 
         LocalDateTime now = LocalDateTime.now();
+        String actor = RequestActor.current();
         List<PurchaseOrder> pos = new ArrayList<>();
+        Map<String, ShippingSchedule> existingAssignments = new LinkedHashMap<>();
+        for (ShippingSchedule open : openSchedules) {
+            if (open.getPoIds() == null) continue;
+            for (String existingPoId : open.getPoIds()) {
+                existingAssignments.putIfAbsent(existingPoId, open);
+            }
+        }
+
+        // Validate *every* requested PO before the first database mutation.
+        // In particular, rejecting a cross-Factory Packing submission must not
+        // leave earlier carton/PO assignments partly rewritten.
         for (String poId : poIds) {
-            PurchaseOrder po = requirePo(orderId, poId);
-            for (ShippingSchedule open : openSchedules) {
-                if (open.getPoIds() != null && open.getPoIds().contains(poId)) {
-                    throw new IllegalArgumentException("PO " + logicalPoLabel(po) + " is already assigned to Shipping Schedule " + open.getScheduleNo() + ".");
+            PurchaseOrder candidate = requirePo(orderId, poId);
+            ShippingSchedule existing = existingAssignments.get(poId);
+            if (clean(candidate.getPickedBy()) == null
+                    || !factory.equals(normalizeFactory(candidate.getFactoryCode()))) {
+                throw new IllegalArgumentException("Pick PO " + logicalPoLabel(candidate)
+                        + " for Factory " + factory + " before creating the Shipment.");
+            }
+            if (!factoryAccess.isUnrestricted()
+                    && !factory.equals(normalizeFactory(candidate.getFactoryCode()))) {
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "Packing cannot create shipments with a PO outside Factory " + factory + ": " + logicalPoLabel(candidate));
+            }
+            if (existing != null) {
+                boolean reassignable = (PLANNED.equals(existing.getStatus()) || REVIEWED.equals(existing.getStatus()))
+                        && existing.getWeighingOrderId() == null && existing.getSentToWeightAt() == null;
+                if (!reassignable) {
+                    throw new IllegalArgumentException("PO " + logicalPoLabel(candidate) + " is already locked in Shipping Schedule "
+                            + existing.getScheduleNo() + " (" + existing.getStatus() + ").");
+                }
+                if (!factoryAccess.isUnrestricted()
+                        && !factory.equals(normalizeFactory(existing.getFactoryCode()))) {
+                    throw new org.springframework.security.access.AccessDeniedException(
+                            "Packing cannot move PO " + logicalPoLabel(candidate) + " out of its current Factory shipment.");
                 }
             }
+        }
+
+        Map<String, List<String>> poIdsMovedBySchedule = new LinkedHashMap<>();
+        for (String poId : poIds) {
+            PurchaseOrder po = requirePo(orderId, poId);
+            // Sales can plan/move PO assignments; Packing must never silently
+            // reassign a PO (and its existing cartons) to a different factory.
+            if (!factoryAccess.isUnrestricted()
+                    && !factory.equals(normalizeFactory(po.getFactoryCode()))) {
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "Packing cannot create shipments with a PO outside Factory " + factory + ": " + logicalPoLabel(po));
+            }
+            ShippingSchedule current = existingAssignments.get(poId);
+            if (current != null && !factoryAccess.isUnrestricted()
+                    && !factory.equals(normalizeFactory(current.getFactoryCode()))) {
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "Packing cannot move PO " + logicalPoLabel(po) + " out of its current Factory shipment.");
+            }
+            if (current != null) {
+                boolean reassignable = (PLANNED.equals(current.getStatus()) || REVIEWED.equals(current.getStatus()))
+                        && current.getWeighingOrderId() == null
+                        && current.getSentToWeightAt() == null;
+                if (!reassignable) {
+                    throw new IllegalArgumentException("PO " + logicalPoLabel(po) + " is already locked in Shipping Schedule " + current.getScheduleNo() + " (" + current.getStatus() + ").");
+                }
+                poIdsMovedBySchedule.computeIfAbsent(current.getId(), ignored -> new ArrayList<>()).add(poId);
+            }
+
             po.setFactoryCode(factory);
             po.setExFtyDate(request.exFtyDate());
-            po.setUpdatedBy(RequestActor.current());
+            po.setUpdatedBy(actor);
             po.setUpdatedAt(now);
             pos.add(po);
             // Cartons may already have been lazily generated before Sales creates the schedule.
@@ -108,7 +178,7 @@ public class ShippingScheduleService {
             if (!existingCartons.isEmpty()) {
                 existingCartons.forEach(carton -> {
                     carton.setFactoryCode(factory);
-                    carton.setUpdatedBy(RequestActor.current());
+                    carton.setUpdatedBy(actor);
                     carton.setUpdatedAt(now);
                 });
                 cartonRepository.saveAll(existingCartons);
@@ -116,20 +186,43 @@ public class ShippingScheduleService {
         }
         poRepository.saveAll(pos);
 
+        for (Map.Entry<String, List<String>> entry : poIdsMovedBySchedule.entrySet()) {
+            ShippingSchedule previous = existingAssignments.values().stream()
+                    .filter(schedule -> Objects.equals(schedule.getId(), entry.getKey()))
+                    .findFirst()
+                    .orElse(null);
+            if (previous == null) continue;
+
+            List<String> remainingPoIds = new ArrayList<>(previous.getPoIds() == null ? List.of() : previous.getPoIds());
+            remainingPoIds.removeIf(entry.getValue()::contains);
+            addHistory(previous, "REASSIGNED", "Sales reassigned " + entry.getValue().size() + " logical PO(s) to a new Shipping Schedule.");
+            previous.setUpdatedBy(actor);
+            previous.setUpdatedAt(now);
+            if (remainingPoIds.isEmpty()) {
+                audit(AppConstants.AuditAction.SHIPPING_SCHEDULE_REMOVE, previous.getId(),
+                        "Removed empty schedule " + previous.getScheduleNo() + " after reassigning all logical POs.");
+                scheduleRepository.delete(previous);
+            } else {
+                previous.setPoIds(remainingPoIds);
+                scheduleRepository.save(previous);
+            }
+        }
+
         ShippingSchedule schedule = new ShippingSchedule();
         schedule.setBuyerCode(AppConstants.Buyer.LULULEMON);
         schedule.setOrderId(orderId);
         schedule.setScheduleNo("SHIP-" + request.exFtyDate().format(DateTimeFormatter.BASIC_ISO_DATE)
                 + "-" + now.format(DateTimeFormatter.ofPattern("HHmmss")));
+        schedule.setShippingName(shippingName);
         schedule.setFactoryCode(factory);
         schedule.setExFtyDate(request.exFtyDate());
         schedule.setPoIds(new ArrayList<>(poIds));
         schedule.setStatus(PLANNED);
-        schedule.setCreatedBy(RequestActor.current());
+        schedule.setCreatedBy(actor);
         schedule.setCreatedAt(now);
-        schedule.setUpdatedBy(RequestActor.current());
+        schedule.setUpdatedBy(actor);
         schedule.setUpdatedAt(now);
-        addHistory(schedule, "CREATED", "Sales assigned " + poIds.size() + " logical PO(s) to Factory " + factory + " for " + request.exFtyDate() + ".");
+        addHistory(schedule, "CREATED", "Packing created Shipment from " + poIds.size() + " picked logical PO(s) for Factory " + factory + " on " + request.exFtyDate() + ".");
         schedule = scheduleRepository.save(schedule);
         audit(AppConstants.AuditAction.SHIPPING_SCHEDULE_CREATE, schedule.getId(),
                 "Created " + schedule.getScheduleNo() + " factory=" + factory + " exFty=" + request.exFtyDate() + " POs=" + poIds.size());
@@ -163,6 +256,9 @@ public class ShippingScheduleService {
         requireOrder(buyerCode, orderId);
         ShippingSchedule schedule = requireSchedule(orderId, scheduleId);
         assertScheduleFactory(schedule);
+        if (!PLANNED.equals(schedule.getStatus()) && !REVIEWED.equals(schedule.getStatus())) {
+            throw new IllegalArgumentException("Shipment has already been sent to Weight; it cannot be CHECKED again.");
+        }
         LocalDateTime now = LocalDateTime.now();
         schedule.setReviewedBy(RequestActor.current());
         schedule.setReviewedAt(now);
@@ -185,8 +281,10 @@ public class ShippingScheduleService {
         assertScheduleFactory(schedule);
         if (COMPLETED.equals(schedule.getStatus())) throw new IllegalArgumentException("Shipping Schedule is already completed.");
         if (schedule.getWeighingOrderId() != null) return buildDetail(schedule);
-        if (!REVIEWED.equals(schedule.getStatus())) {
-            throw new IllegalArgumentException(org.bsl.cartonloading.common.constants.AppMessages.SHIPPING_SCHEDULE_REVIEW_REQUIRED);
+        // A single SEND click performs the readiness check. No separate CHECK step is required.
+        // Weight assignments must never be created until Packing explicitly sends the shipment.
+        if (!PLANNED.equals(schedule.getStatus()) && !REVIEWED.equals(schedule.getStatus())) {
+            throw new IllegalArgumentException("Shipment is not in a sendable state: " + schedule.getStatus());
         }
 
         ShippingScheduleDetail detail = buildDetail(schedule);
@@ -195,7 +293,7 @@ public class ShippingScheduleService {
                     .filter(row -> !row.readyForWeight())
                     .map(row -> logicalPoLabel(row.po())
                             + " [SKU=" + (row.skuAssigned() ? "OK" : "MISSING")
-                            + ", PACKED=" + row.finishedCartons() + "/" + row.totalCartons()
+                            + ", IDENTIFIED=" + row.finishedCartons() + "/" + row.totalCartons()
                             + ", SSCC=" + row.ssccAssignedCartons() + "/" + row.totalCartons() + "]")
                     .toList();
             throw new IllegalArgumentException("Shipping Schedule is not ready for Carton Weight. Check: " + String.join("; ", notReady));
@@ -207,6 +305,12 @@ public class ShippingScheduleService {
                 new WeighingOrderCreateRequest(schedule.getScheduleNo(), new ArrayList<>(schedule.getPoIds()), schedule.getId())
         );
         LocalDateTime now = LocalDateTime.now();
+        // Preserve who approved the readiness check in the same atomic SEND workflow.
+        if (schedule.getReviewedAt() == null) {
+            schedule.setReviewedBy(RequestActor.current());
+            schedule.setReviewedAt(now);
+            addHistory(schedule, "PACKING_CHECK_AUTO", "Carton identities automatically validated during SEND TO WEIGHT.");
+        }
         schedule.setWeighingOrderId(weighingOrder.getId());
         schedule.setStatus(SENT_TO_WEIGHT);
         schedule.setSentToWeightBy(RequestActor.current());
@@ -223,7 +327,10 @@ public class ShippingScheduleService {
     public List<WeighingResult> weightHistory(String buyerCode, String orderId, String scheduleId) {
         requireOrder(buyerCode, orderId);
         ShippingSchedule schedule = requireSchedule(orderId, scheduleId);
-        assertScheduleFactory(schedule);
+        if (!factoryAccess.canAccessAssignedFactory(schedule.getFactoryCode())
+                && !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) {
+            throw new org.springframework.security.access.AccessDeniedException("Factory access denied");
+        }
         return weightResultRepository.findByShippingScheduleIdOrderByCreatedAtDesc(schedule.getId());
     }
 
@@ -250,7 +357,9 @@ public class ShippingScheduleService {
             if (optional.isEmpty()) continue;
             PurchaseOrder po = optional.get();
             List<Carton> cartons = cartonRepository.findByPoIdOrderByCartonNoAsc(poId);
-            int finished = (int) cartons.stream().filter(c -> c.getFinishedAt() != null || AppConstants.CartonStatus.FINISHED.equals(c.getStatus()) || AppConstants.CartonStatus.READY_TO_SHIP.equals(c.getStatus())).count();
+            // Legacy DTO field is named finishedCartons; its new station-handoff
+            // meaning is IDENTITY COMPLETE. Physical contents are verified later by RFID.
+            int finished = (int) cartons.stream().filter(c -> CartonWeightReadiness.isReady(po, c)).count();
             int assigned = (int) cartons.stream().filter(c -> clean(c.getSscc()) != null).count();
             int pass = (int) cartons.stream().filter(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())).count();
             int failed = (int) cartons.stream().filter(c -> AppConstants.WeightStatus.FAILED.equals(c.getWeightStatus()) || "HOLD".equals(c.getWeightStatus())).count();
@@ -290,7 +399,13 @@ public class ShippingScheduleService {
         ShippingSchedule schedule = scheduleRepository.findByIdAndOrderIdAndBuyerCode(scheduleId, orderId, AppConstants.Buyer.LULULEMON).orElse(null);
         if (schedule == null || COMPLETED.equals(schedule.getStatus())) return;
         ShippingScheduleDetail detail = buildDetail(schedule);
-        if (detail.totalCartons() > 0 && detail.remainingWeightCartons() == 0 && detail.failedCartons() == 0 && detail.passCartons() == detail.totalCartons()) {
+        List<Carton> allCartons = (schedule.getPoIds() == null ? List.<String>of() : schedule.getPoIds()).stream()
+                .flatMap(id -> cartonRepository.findByPoIdOrderByCartonNoAsc(id).stream()).toList();
+        String rfidReview = RfidReviewStatus.fromCartons(allCartons);
+        schedule.setRfidReviewStatus(rfidReview);
+        // New weight-first workflow: shipment FINAL requires RFID PASS, but weight session COMPLETE remains independent.
+        boolean allRfidPass = RfidReviewStatus.PASS.equals(rfidReview);
+        if (allRfidPass && detail.totalCartons() > 0 && detail.remainingWeightCartons() == 0 && detail.failedCartons() == 0 && detail.passCartons() == detail.totalCartons()) {
             LocalDateTime now = LocalDateTime.now();
             schedule.setStatus(COMPLETED);
             schedule.setCompletedBy(RequestActor.current());
@@ -299,7 +414,10 @@ public class ShippingScheduleService {
             schedule.setUpdatedAt(now);
             addHistory(schedule, "COMPLETED", "All cartons passed Carton Weight. Shipping history retained with SSCC and weighing results.");
             scheduleRepository.save(schedule);
-            audit(AppConstants.AuditAction.SHIPPING_SCHEDULE_COMPLETE, schedule.getId(), "Completed " + schedule.getScheduleNo());
+            audit(AppConstants.AuditAction.SHIPPING_SCHEDULE_COMPLETE, schedule.getId(), "Completed " + schedule.getScheduleNo()
+                    + "; RFID review=" + rfidReview);
+        } else {
+            scheduleRepository.save(schedule);
         }
     }
 

@@ -40,6 +40,7 @@ public class UserService {
         dto.setViewOnly(user.isViewOnly());
         dto.setBuyerPermissions(user.getBuyerPermissions());
         dto.setFactoryPermissions(user.getFactoryPermissions());
+        dto.setWeighingFactoryPermissions(user.getWeighingFactoryPermissions());
         return dto;
     }
 }

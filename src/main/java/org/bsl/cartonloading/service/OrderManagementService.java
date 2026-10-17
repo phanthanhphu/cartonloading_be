@@ -80,6 +80,17 @@ public class OrderManagementService {
 
     public PackingOrderResponse updateOrder(String buyer, String id, PackingOrderRequest request) {
         String code = requiredBuyer(buyer);
+        // An Order containing a completed-weight PO must not change its master data.
+        if (AppConstants.Buyer.LULULEMON.equals(code)) {
+            for (PurchaseOrder po : purchaseOrders.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(id, code)) {
+                List<Carton> cartons = ssccCartons.findByPoIdOrderByCartonNoAsc(po.getId());
+                if (AppConstants.WeighingSessionStatus.COMPLETED.equals(po.getWeighingSessionStatus())
+                        || po.getWeighingCompletedAt() != null
+                        || (!cartons.isEmpty() && cartons.stream().allMatch(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())))) {
+                    throw new IllegalArgumentException("Order has a PO with completed Carton Weight; Order editing is locked.");
+                }
+            }
+        }
         PackingOrderResponse saved = orders.update(code, id, request);
         audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.ORDER, id, AppMessages.orderUpdatedAudit(saved.orderName(), code), null, null);
         return saved;
@@ -277,7 +288,15 @@ public class OrderManagementService {
                 progress.scannedQty(), progress.scannedCartons(), progress.scannedFullCartons(),
                 progress.scannedRemainderQty(), progress.scannedRemainderCartons(),
                 progress.identifiedQty(), progress.identifiedCartons(), progress.identifiedFullCartons(),
-                progress.identifiedRemainderQty(), progress.identifiedRemainderCartons()
+                progress.identifiedRemainderQty(), progress.identifiedRemainderCartons(),
+                AppConstants.WeighingSessionStatus.COMPLETED.equals(po.getWeighingSessionStatus())
+                        || po.getWeighingCompletedAt() != null
+                        || (!cartons.isEmpty() && cartons.stream().allMatch(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus()))),
+                po.getPickedBy() != null && !po.getPickedBy().isBlank(),
+                po.getSku() != null && !po.getSku().isBlank() || cartons.stream().anyMatch(c ->
+                        c.getSscc18() != null && !c.getSscc18().isBlank()
+                                || c.getStartedAt() != null || c.getWeighedAt() != null
+                                || c.getWeightStatus() != null && !c.getWeightStatus().isBlank())
         );
     }
 

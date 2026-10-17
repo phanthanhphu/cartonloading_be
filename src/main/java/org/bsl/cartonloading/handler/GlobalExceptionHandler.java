@@ -15,6 +15,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
@@ -36,6 +37,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(WorkflowNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(WorkflowNotFoundException ex) {
         return json(HttpStatus.NOT_FOUND, new ApiError(HttpStatus.NOT_FOUND.value(), ex.getMessage()));
+    }
+
+    /** Missing API/static paths must be HTTP 404, not an unexpected HTTP 500. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleNoResourceFound(NoResourceFoundException ex) {
+        logger.debug("Resource not found: {}", ex.getMessage());
+        return json(HttpStatus.NOT_FOUND,
+                new ApiError(HttpStatus.NOT_FOUND.value(), "Resource not found."));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

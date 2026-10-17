@@ -19,6 +19,13 @@ public class CartonWeightStationController {
         this.service = service;
     }
 
+    /** Legacy compatibility endpoint: no-op; only Packing SEND can dispatch a shipment. */
+    @PostMapping("/prepare")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    public int prepare(@PathVariable String buyer) {
+        return service.prepareAssignedSchedules(buyer);
+    }
+
     @GetMapping("/assignments")
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.canManageSales() or @accessControl.canAssignBarcode())")
     public List<CartonWeightAssignmentRow> assignments(@PathVariable String buyer) {

@@ -20,6 +20,12 @@ public class PurchaseOrder {
     @Id
     private String id;
     private String buyerCode;
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey = AppConstants.Buyer.LULULEMON;
+    /** User-driven PO ownership; separate from business PO status. */
+    private String pickedBy;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    private LocalDateTime pickedAt;
     /** Parent Packing Order for the order-scoped LULULEMON workflow. */
     private String orderId;
     private String factoryCode;
@@ -76,6 +82,8 @@ public class PurchaseOrder {
 
     /** Carton Weighing station session state for this logical PO. */
     private String weighingSessionStatus;
+    /** PASS, PENDING, ISSUES: latest RFID review, independent of weight completion. */
+    private String rfidReviewStatus;
     private String weighingStationCode;
     private String weighingStartedBy;
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")

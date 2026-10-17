@@ -57,6 +57,16 @@ public class BuyerFactoryAccessService {
         return allowed.contains("*") || allowed.contains(normalized);
     }
 
+    public boolean canAccessWeighingFactory(String factoryCode) {
+        return currentUser().canAccessWeighingFactory(factoryCode);
+    }
+
+    public void assertWeighingFactoryAccess(String factoryCode) {
+        if (!canAccessWeighingFactory(factoryCode)) {
+            throw new org.springframework.security.access.AccessDeniedException("Weighing Factory access denied: " + factoryCode);
+        }
+    }
+
     public void assertAssignedFactoryAccess(String factoryCode) {
         if (!canAccessAssignedFactory(factoryCode)) {
             throw new IllegalArgumentException(AppMessages.factoryAccessDenied(factoryCode));

@@ -47,7 +47,10 @@ public record PoManagementRow(
         int identifiedCartons,
         int identifiedFullCartons,
         int identifiedRemainderQty,
-        int identifiedRemainderCartons
+        int identifiedRemainderCartons,
+        boolean weightEditLocked,
+        boolean picked,
+        boolean hasOperationalData
 ) {
     public PoManagementRow(
             String key,
@@ -68,6 +71,7 @@ public record PoManagementRow(
                 null, null, null, null, null, null, null, null, null, null, null,
                 null, null,
                 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0);
+                0, 0, 0, 0, 0,
+                false, false, false);
     }
 }

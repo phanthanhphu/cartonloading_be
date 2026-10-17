@@ -66,7 +66,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return path.matches("^/error.*|/actuator.*|/health$")
+        // These admin/docs routes require an authenticated SecurityContext even if
+        // their paths end with a static extension such as /swagger-ui/index.html.
+        if (path.startsWith("/v3/api-docs") || path.startsWith("/swagger-ui")
+                || path.startsWith("/swagger-resources") || path.startsWith("/actuator/")) {
+            return path.startsWith("/actuator/health");
+        }
+        return path.matches("^/error.*|/health$|/actuator/health(?:/.*)?$")
                 || path.equals("/ws")
                 || path.startsWith("/ws/")
                 || path.startsWith("/assets/")

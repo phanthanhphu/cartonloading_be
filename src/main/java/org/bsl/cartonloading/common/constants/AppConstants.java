@@ -40,7 +40,6 @@ public final class AppConstants {
         public static final String PURCHASE_ORDERS = "purchase_orders";
         public static final String CARTONS = "cartons";
         public static final String CARTON_ITEMS = "carton_items";
-        public static final String PRINT_HANDOFFS = "print_handoffs";
         public static final String SCAN_EVENTS = "scan_events";
         public static final String WEIGHING_PROFILES = "weighing_profiles";
         public static final String WEIGHING_ORDERS = "weighing_orders";
@@ -160,14 +159,6 @@ public final class AppConstants {
         private RfidStatus() { }
     }
 
-    public static final class PrintRequestStatus {
-        public static final String SENT = "SENT";
-        public static final String CANCELLED = "CANCELLED";
-        public static final String PENDING = "PENDING";
-        public static final String PRINTING = "PRINTING";
-        public static final String PRINTED_SENT_TO_PACKING = "PRINTED_SENT_TO_PACKING";
-        private PrintRequestStatus() { }
-    }
 
     public static final class WeightStatus {
         public static final String PASS = "PASS";
@@ -224,7 +215,6 @@ public final class AppConstants {
      */
     public static final class ApiPath {
         public static final String SSCC_WORKFLOW_ORDER = "/api/buyers/{buyer}/lululemon/orders/{orderId}";
-        public static final String SSCC_WORKFLOW_PRINT_REQUESTS = "/api/buyers/{buyer}/lululemon/print-requests";
         public static final String SSCC_WORKFLOW_WEIGHING = "/api/buyers/{buyer}/lululemon/orders/{orderId}/weighing";
         public static final String BARCODE_WORKFLOW_ORDERS = "/api/buyers/{buyer}/orders";
         public static final String BARCODE_WORKFLOW_PACKING_ORDERS = "/api/buyers/{buyer}/packing-orders";

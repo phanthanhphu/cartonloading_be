@@ -14,5 +14,6 @@ public record CheckingSearchResponse(
     public record CartonRow(String id, String orderId, String orderName, String poId, String poNumber, Integer cartonNo,
                             String sscc18, String sku, String style, String color, String size,
                             Integer plannedQty, String packingStatus, boolean identified,
-                            String lastCheck, String checkedBy, LocalDateTime checkedAt) { }
+                            String lastCheck, String checkedBy, LocalDateTime checkedAt,
+                            String labelConfirmedBy, LocalDateTime labelConfirmedAt) { }
 }

@@ -17,5 +17,6 @@ public record UserAdminRequest(
         String departmentId,
         List<String> accessPermissions,
         List<String> buyerPermissions,
-        List<String> factoryPermissions
+        List<String> factoryPermissions,
+        List<String> weighingFactoryPermissions
 ) {}

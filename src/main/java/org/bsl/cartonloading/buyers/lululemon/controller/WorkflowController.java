@@ -35,6 +35,13 @@ public class WorkflowController {
         return service.importAllBp(buyer, orderId, file, replace);
     }
 
+    @PostMapping(value = "/all-bp/import-shared", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    public ImportResult importSharedAllBp(@PathVariable String buyer, @PathVariable String orderId,
+                                           @RequestPart("file") MultipartFile file) {
+        return service.importSharedAllBp(buyer, orderId, file);
+    }
+
     @GetMapping("/pos")
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
     public Page<PoSummary> listPos(

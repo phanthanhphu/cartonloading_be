@@ -24,6 +24,7 @@ public record CartonWeightAssignmentRow(
         Integer cartonQty,
         String sscc18,
         String weightStatus,
+        String rfidStatus,
         String stationCode,
         LocalDateTime weighedAt
 ) { }

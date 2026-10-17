@@ -24,6 +24,7 @@ public class UserDTO {
     private boolean viewOnly;
     private List<String> buyerPermissions = new ArrayList<>();
     private List<String> factoryPermissions = new ArrayList<>();
+    private List<String> weighingFactoryPermissions = new ArrayList<>();
 
     private String clean(String value) { return value == null ? "" : value.trim(); }
 
@@ -66,6 +67,11 @@ public class UserDTO {
     public List<String> getBuyerPermissions() { return List.copyOf(buyerPermissions); }
     public void setBuyerPermissions(List<String> values) {
         this.buyerPermissions = new ArrayList<>(BuyerAccess.normalizeAll(values, AppConstants.Role.ADMIN.equals(getRole())));
+    }
+
+    public List<String> getWeighingFactoryPermissions() { return List.copyOf(weighingFactoryPermissions); }
+    public void setWeighingFactoryPermissions(List<String> values) {
+        weighingFactoryPermissions = values == null ? new ArrayList<>() : new ArrayList<>(values);
     }
 
     public List<String> getFactoryPermissions() { return List.copyOf(factoryPermissions); }

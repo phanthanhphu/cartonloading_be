@@ -39,6 +39,9 @@ public class User {
      */
     private List<String> factoryPermissions = new ArrayList<>();
 
+    /** Null = legacy access, empty = no weight factories, otherwise explicit weigh-only scope. */
+    private List<String> weighingFactoryPermissions;
+
     /**
      * User module access. ADMIN is always treated as full application access.
      * VIEW_SYSTEM is read-only and intentionally exclusive.
@@ -152,6 +155,29 @@ public class User {
             String normalized = normalizeFactoryCode(value);
             if (!normalized.isEmpty() && !this.factoryPermissions.contains(normalized)) this.factoryPermissions.add(normalized);
         }
+    }
+
+    public List<String> getWeighingFactoryPermissions() {
+        return weighingFactoryPermissions == null ? getFactoryPermissions() : List.copyOf(weighingFactoryPermissions);
+    }
+
+    public void setWeighingFactoryPermissions(Collection<String> values) {
+        this.weighingFactoryPermissions = new ArrayList<>();
+        if (values == null) return;
+        for (String value : values) {
+            String code = normalizeFactoryCode(value);
+            if (!code.matches("F[1-7]")) throw new IllegalArgumentException("Weighing Factory must be F1 to F7");
+            if (!weighingFactoryPermissions.contains(code)) weighingFactoryPermissions.add(code);
+        }
+    }
+
+    public boolean canAccessWeighingFactory(String factoryCode) {
+        if (isAdminRole() || canManageSales()) return true;
+        // Preserve existing Packing/read-only visibility; actual weighing mutations
+        // still require WEIGHT_CHECK at the controller.
+        if (!canWeightCheck()) return canAccessFactory(factoryCode);
+        String code = normalizeFactoryCode(factoryCode);
+        return !code.isEmpty() && getWeighingFactoryPermissions().contains(code);
     }
 
     public boolean canAccessFactory(String factoryCode) {

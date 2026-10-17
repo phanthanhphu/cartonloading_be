@@ -16,6 +16,8 @@ import java.time.LocalDateTime;
 public class CartonCheckingRecord {
     @Id private String id;
     private String buyerCode;
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
     private String orderId;
     private String poId;
     private String poNumber;

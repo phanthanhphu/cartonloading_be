@@ -30,7 +30,7 @@ public class ShippingScheduleController {
     }
 
     @PostMapping
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode())")
     public ShippingScheduleDetail create(
             @PathVariable String buyer,
             @PathVariable String orderId,

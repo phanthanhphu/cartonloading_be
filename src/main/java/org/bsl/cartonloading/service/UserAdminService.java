@@ -179,6 +179,7 @@ public class UserAdminService {
         user.setAccessPermissions(request.accessPermissions());
         user.setBuyerPermissions(request.buyerPermissions());
         user.setFactoryPermissions(request.factoryPermissions());
+        if (request.weighingFactoryPermissions() != null) user.setWeighingFactoryPermissions(request.weighingFactoryPermissions());
 
         if (!user.isAdminRole() && user.getBuyerPermissions().isEmpty()) {
             throw new IllegalArgumentException(AppMessages.BUYER_PERMISSION_REQUIRED);

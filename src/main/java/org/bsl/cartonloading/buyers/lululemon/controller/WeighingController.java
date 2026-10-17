@@ -134,7 +134,8 @@ public class WeighingController {
             @PathVariable String orderId,
             @RequestBody WeighingOrderCreateRequest request
     ) {
-        return service.createWeighingOrder(buyer, orderId, request);
+        throw new IllegalArgumentException(
+                "Weighing orders are created only by Packing: Shipment Management > SEND TO WEIGHT.");
     }
 
     @PostMapping("/orders/{weighingOrderId}/lookup")

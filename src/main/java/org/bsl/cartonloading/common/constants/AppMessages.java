@@ -94,7 +94,7 @@ public final class AppMessages {
 
     public static final String SELECT_PO_FOR_WEIGHING = "Select at least one completed PO for the Weighing Order.";
     public static final String WEIGHING_SINGLE_FACTORY = "One Weighing Order can contain POs from only one Factory.";
-    public static final String VALID_SSCC_REQUIRED = "Scan a valid 18-digit SSCC.";
+    public static final String VALID_SSCC_REQUIRED = "Scan an 18-digit SSCC or a 20-digit GS1 (00) barcode.";
     public static final String SCALE_NOT_STABLE = "Scale signal is not Stable. Weight was not accepted.";
     public static final String REWEIGH_REASON_REQUIRED = "Reason is required for Re-weigh.";
     public static final String OVERRIDE_REASON_REQUIRED = "Reason is required to Override FAILED to PASS.";
@@ -103,7 +103,7 @@ public final class AppMessages {
     public static final String CARTON_NOT_IN_WEIGHING_ORDER = "Carton Not in This Weighing Order.";
     public static final String SSCC_NOT_IN_OPEN_WEIGHING_ORDER = "This SSCC is not assigned to any Weighing Order in the active Order. Send the completed PO to Carton Weight first.";
     public static final String SSCC_NOT_IN_ASSIGNED_SHIPPING = "This SSCC-18 is not in a Shipping List assigned to Carton Weight.";
-    public static final String CARTON_NOT_READY_FOR_WEIGHING = "Not Ready for Weighing. Carton must finish Carton Loading and have SSCC assigned.";
+    public static final String CARTON_NOT_READY_FOR_WEIGHING = "Not Ready for Weighing. Confirm SSCC, planned Unit Qty and carton label SKU in Packing first.";
     public static final String WEIGHING_PO_NOT_IN_QUEUE = "This PO has not been sent to Carton Weight.";
     public static final String WEIGHING_SESSION_NOT_RUNNING = "Press START for the selected PO before scanning or accepting weight.";
     public static final String WEIGHING_SSCC_WRONG_PO = "This SSCC belongs to a different logical PO. Select the correct PO before weighing.";
@@ -140,7 +140,6 @@ public final class AppMessages {
     public static final String WEIGHING_RESULT_BLOCKS_SSCC_UNASSIGN = "This carton already has a weighing result. Re-open/resolve Weighing before unassigning SSCC.";
     public static final String TRACE_KEY_REQUIRED = "PO, SKU, Carton ID or SSCC is required.";
     public static final String PO_OPERATION_LOCKED = "PO cannot be edited or deleted after Packing/Carton Loading has started.";
-    public static final String PO_HANDOFF_LOCKED = "PO is already in an active Print Room handoff. Cancel the handoff before editing or deleting this PO.";
     public static final String ALL_BP_REPLACE_LOCKED = "All_BP cannot be replaced after Packing has started. Create a new Order or correct the operational data first.";
     public static final String ALL_BP_HEADER_NOT_FOUND = "Cannot find the All_BP header row. Required headers include PO, Style, Q'ty and Pcs/ctn.";
     public static final String SHIPPING_HEADERS_NOT_FOUND = "Cannot find Shipping List headers PO and Ex-fty Date.";
@@ -150,20 +149,9 @@ public final class AppMessages {
     public static final String ALL_BP_PCS_CTN_MUST_MATCH = "All ALL_BP source rows for one imported PO must keep the same Pcs/ctn.";
     public static final String EDITED_PO_CARTON_PLAN_REQUIRED = "Edited PO does not contain any carton quantity plan.";
     public static final String EXCEPTION_REASON_REQUIRED = "Reason is required for Supervisor/Admin exception actions.";
-    public static final String SSCC_LENGTH_INVALID = "SSCC-18 must contain exactly 18 digits.";
+    public static final String SSCC_LENGTH_INVALID = "SSCC must contain 18 digits or 20 digits beginning with GS1 AI 00.";
 
-    public static final String HANDOFF_SELECT_PO = "Select at least one PO to send";
-    public static final String HANDOFF_MAX_PO = "A PO handoff can contain at most 200 POs";
-    public static final String HANDOFF_SINGLE_FACTORY = "Select POs from one Factory per handoff";
-    public static final String HANDOFF_CANCEL_STATUS_INVALID = "Only a sent PO handoff can be cancelled";
-    public static final String HANDOFF_CANCEL_PERMISSION = "Only the Packing sender, Sales, or Admin can cancel this request";
-    public static final String HANDOFF_DELETE_STATUS_INVALID = "Only a SENT or PENDING Print Request can be deleted. PRINTING or completed requests must be kept for history.";
-    public static final String HANDOFF_DELETE_PERMISSION = "Only the Packing sender, Sales, or Admin can delete this Print Request.";
-    public static final String HANDOFF_ACCESS_DENIED = "You do not have permission to access this PO handoff";
-    public static final String HANDOFF_NOT_FOUND = "PO handoff not found";
-    public static final String HANDOFF_STATUS_INVALID = "Print Request status transition is not allowed.";
-    public static final String HANDOFF_STATUS_PERMISSION = "Only Print Room or Admin can update Print Request processing status.";
-    public static final String SHIPPING_SCHEDULE_REVIEW_REQUIRED = "Packing must CHECK the Shipping Schedule before sending it to Carton Weight.";
+    public static final String SHIPPING_SCHEDULE_REVIEW_REQUIRED = "Packing can SEND TO WEIGHT only when all carton identities, SSCC, Qty and SKU are ready.";
     public static final String SHIPPING_SCHEDULE_REMOVE_BLOCKED = "Shipping Schedule can only be removed before Packing confirms transfer to the Carton Weight area.";
     public static final String WEIGHING_REQUIRES_SHIPPING_SCHEDULE = "LULULEMON Carton Weight must be created from a reviewed Shipping Schedule.";
 
@@ -445,7 +433,7 @@ public final class AppMessages {
     }
 
     public static String poNotReadyForWeighing(String poNumber) {
-        return "PO " + poNumber + " is not fully Ready to Ship with SSCC assigned for every carton.";
+        return "PO " + poNumber + " has cartons missing confirmed SSCC, planned quantity or label SKU. Complete carton identity in Packing before transferring to Carton Weight.";
     }
 
     public static String cartonAlreadyInWeighingOrder(String orderName) {
@@ -469,17 +457,6 @@ public final class AppMessages {
         return "Weight profile for PO " + poNumber + " is incomplete.";
     }
 
-    public static String handoffPoNotInOrder(String poId) {
-        return "PO is not part of the selected Order: " + poId;
-    }
-
-    public static String handoffPoAlreadyQueued(Collection<String> poNumbers) {
-        return "PO already exists in an active handoff: " + String.join(", ", poNumbers);
-    }
-
-    public static String handoffOnlyFor(String buyer) {
-        return "PO handoff is only available for " + buyer;
-    }
 
     public static String tooLong(String field) {
         return field + " is too long.";

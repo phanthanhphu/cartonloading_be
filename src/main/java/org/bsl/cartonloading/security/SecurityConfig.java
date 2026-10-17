@@ -49,8 +49,11 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/login", "/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/buyers/login-options").permitAll()
                         .requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**", "/css/**", "/js/**", "/images/**").permitAll()
-                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/swagger-resources/**", "/webjars/**").permitAll()
-                        .requestMatchers("/actuator/**", "/health", "/info", "/ws/**").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/health/**", "/health", "/info", "/ws/**").permitAll()
+                        // API docs and remaining Actuator endpoints require authentication by default.
+                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html",
+                                "/swagger-resources/**", "/webjars/**").authenticated()
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // Buyer modules enforce buyer/factory/operation permissions at controller/service level.
                         // All authenticated users (including VIEW_SYSTEM) may only read/search/export.

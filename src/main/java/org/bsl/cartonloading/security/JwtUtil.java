@@ -9,8 +9,12 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.bsl.cartonloading.model.User;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.security.Key;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -19,9 +23,23 @@ import java.util.List;
 
 @Component
 public class JwtUtil {
-    private final String jwtSecret = "VerySecretKeyThatIsAtLeast256bitsLongForHS256Algorithm!!!";
     private final int jwtExpirationMs = 24 * 60 * 60 * 1000;
-    private final Key key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+    private final Key key;
+
+    public JwtUtil(
+            @Value("${security.jwt.secret:}") String jwtSecret,
+            @Value("${security.jwt.secret-file:${user.home}/.cartonloading/jwt-secret.key}") String localSecretFile,
+            @Value("${security.jwt.auto-generate:true}") boolean autoGenerate,
+            Environment environment
+    ) {
+        // Production does not silently create different secrets on separate server instances.
+        boolean production = Arrays.stream(environment.getActiveProfiles())
+                .anyMatch(profile -> "prod".equalsIgnoreCase(profile)
+                        || "production".equalsIgnoreCase(profile));
+        String resolvedSecret = JwtSigningKeyLoader.resolve(
+                jwtSecret, Path.of(localSecretFile), autoGenerate && !production);
+        this.key = Keys.hmacShaKeyFor(resolvedSecret.getBytes(StandardCharsets.UTF_8));
+    }
 
     public String generateToken(String email, String role, long tokenVersion, Collection<String> accessPermissions) {
         return generateToken(email, role, tokenVersion, accessPermissions, List.of());
