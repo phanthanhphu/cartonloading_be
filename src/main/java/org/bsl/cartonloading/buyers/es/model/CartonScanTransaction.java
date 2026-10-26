@@ -21,6 +21,8 @@ public class CartonScanTransaction {
 
     private Long jobId;
     private String buyerCode;
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey;
     private String orderId;
     private String orderName;
     private String masterLineId;

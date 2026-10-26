@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.lululemon.model;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
@@ -11,8 +13,10 @@ import java.util.Set;
 /** Durable ADB capture reservation. No expiration is automatic: release requires user review. */
 @Data
 @NoArgsConstructor
-@Document(collection = "lululemon_rfid_pda_captures")
+@Document(collection = AppConstants.Collection.RFID_PDA_CAPTURES)
 public class RfidPdaCapture {
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
     @Id private String serial;
     private String station;
     private String order;

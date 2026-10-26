@@ -17,6 +17,7 @@ public record UserAdminRequest(
         String departmentId,
         List<String> accessPermissions,
         List<String> buyerPermissions,
+        List<org.bsl.cartonloading.model.BuyerTypePermission> buyerTypePermissions,
         List<String> factoryPermissions,
         List<String> weighingFactoryPermissions
 ) {}

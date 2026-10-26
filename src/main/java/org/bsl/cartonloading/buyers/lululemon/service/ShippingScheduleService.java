@@ -11,6 +11,7 @@ import org.bsl.cartonloading.common.importing.TextNormalizer;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
+import org.bsl.cartonloading.service.FactoryCatalogService;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -33,6 +34,7 @@ public class ShippingScheduleService {
     private final BuyerFactoryAccessService factoryAccess;
     private final WeighingService weighingService;
     private final AuditLogService auditLogService;
+    private final FactoryCatalogService factories;
 
     public ShippingScheduleService(
             ShippingScheduleRepository scheduleRepository,
@@ -42,7 +44,8 @@ public class ShippingScheduleService {
             PackingOrderService orderService,
             BuyerFactoryAccessService factoryAccess,
             WeighingService weighingService,
-            AuditLogService auditLogService
+            AuditLogService auditLogService,
+            FactoryCatalogService factories
     ) {
         this.scheduleRepository = scheduleRepository;
         this.poRepository = poRepository;
@@ -52,6 +55,7 @@ public class ShippingScheduleService {
         this.factoryAccess = factoryAccess;
         this.weighingService = weighingService;
         this.auditLogService = auditLogService;
+        this.factories = factories;
     }
 
     public List<ShippingScheduleSummary> list(String buyerCode, String orderId) {
@@ -84,7 +88,8 @@ public class ShippingScheduleService {
         if (factory == null) throw new IllegalArgumentException("Select a Factory for this Shipping Schedule.");
         // Packing may only dispatch shipments for explicitly assigned factories.
         // Validate on the server; filtering the Factory dropdown is not authorization.
-        factoryAccess.assertAssignedFactoryAccess(factory);
+        factories.requireActive(AppConstants.Buyer.LULULEMON, factory); // never create in INACTIVE factory
+        factoryAccess.assertAssignedFactoryAccess(factory); // enforces user assignment
         if (request == null || request.exFtyDate() == null) throw new IllegalArgumentException("Ex-Factory Date is required.");
 
         String shippingName = request.shippingName() == null ? "" : request.shippingName().trim();

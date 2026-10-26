@@ -8,6 +8,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import org.bsl.cartonloading.common.constants.AppConstants;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @NoArgsConstructor
@@ -21,6 +22,14 @@ public class Buyer {
     private boolean active = true;
     private int sequence;
     private String description;
+    /** Null means older Buyer record; explicit empty means no active workflows. */
+    private List<String> supportedTypes;
+    public List<String> getSupportedTypes() {
+        return supportedTypes == null ? SystemType.legacyBuyerTypes(buyerKey) : SystemType.normalizeAll(supportedTypes);
+    }
+    public void setSupportedTypes(List<String> values) { this.supportedTypes = SystemType.normalizeAll(values); }
+    public boolean supportsType(String value) { return getSupportedTypes().contains(SystemType.normalize(value)); }
+
     private String createdBy;
     private String updatedBy;
 

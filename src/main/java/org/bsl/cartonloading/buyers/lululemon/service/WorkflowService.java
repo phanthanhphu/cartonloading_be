@@ -25,6 +25,7 @@ import org.bsl.cartonloading.buyers.es.model.PackingOrder;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
 import org.bsl.cartonloading.service.RequestActor;
+import org.bsl.cartonloading.service.FactoryCatalogService;
 import org.bsl.cartonloading.common.importing.ExcelImportSupport;
 import org.bsl.cartonloading.common.importing.TextNormalizer;
 import org.springframework.data.domain.Page;
@@ -62,6 +63,7 @@ public class WorkflowService {
     private final MongoTemplate mongoTemplate;
     private final AuditLogService auditLogService;
     private final AppSocketPublisher socketPublisher;
+    private final FactoryCatalogService factories;
 
     public WorkflowService(
             PurchaseOrderRepository poRepository,
@@ -74,7 +76,8 @@ public class WorkflowService {
             BuyerFactoryAccessService factoryAccess,
             MongoTemplate mongoTemplate,
             AuditLogService auditLogService,
-            AppSocketPublisher socketPublisher
+            AppSocketPublisher socketPublisher,
+            FactoryCatalogService factories
     ) {
         this.poRepository = poRepository;
         this.cartonRepository = cartonRepository;
@@ -87,13 +90,14 @@ public class WorkflowService {
         this.mongoTemplate = mongoTemplate;
         this.auditLogService = auditLogService;
         this.socketPublisher = socketPublisher;
+        this.factories = factories;
     }
 
     public ImportResult importAllBp(String buyerCode, String orderId, MultipartFile file, boolean replace) {
         return importAllBpInternal(buyerCode, orderId, file, replace, false);
     }
 
-    /** Sales master file: incremental upsert, never delete PO/carton/scan data or reset ownership. */
+    /** Sales master file: add only new Master PO + PO pairs; never overwrite an existing pair. */
     public ImportResult importSharedAllBp(String buyerCode, String orderId, MultipartFile file) {
         return importAllBpInternal(buyerCode, orderId, file, false, true);
     }
@@ -101,6 +105,8 @@ public class WorkflowService {
     private synchronized ImportResult importAllBpInternal(String buyerCode, String orderId, MultipartFile file,
                                                            boolean replace, boolean sharedImport) {
         PackingOrder order = requireOrder(buyerCode, orderId);
+        if (order.getFactoryCode() == null || order.getFactoryCode().isBlank())
+            throw new IllegalArgumentException("Classify legacy Order Factory before ALL_BP import.");
         List<ParsedPo> parsed;
         List<String> warnings = new ArrayList<>();
         List<String> sourceHeaderLabels = List.of();
@@ -114,14 +120,22 @@ public class WorkflowService {
             List<SourceColumn> sourceColumns = sourceColumns(header, evaluator);
             sourceHeaderLabels = sourceColumns.stream().map(SourceColumn::label).toList();
 
+            // All four identity columns are required: a missing header must not
+            // silently turn every value in that column into the same empty key.
+            requiredCanonicalColumn(columns, AppConstants.AllBpKey.MASTER_PO);
             int poCol = requiredCanonicalColumn(columns, AppConstants.AllBpKey.PO);
+            requiredCanonicalColumn(columns, AppConstants.AllBpKey.PACKING_PLAN);
+            requiredCanonicalColumn(columns, AppConstants.AllBpKey.SALES_ORDER_PTS);
             int styleCol = requiredCanonicalColumn(columns, AppConstants.AllBpKey.STYLE);
             int qtyCol = requiredCanonicalColumn(columns, AppConstants.AllBpKey.QTY);
             int pcsCol = requiredCanonicalColumn(columns, AppConstants.AllBpKey.PCS_CTN);
             Integer factoryCol = columns.get("FACTORY");
             boolean warnedMissingFactory = false;
 
-            Map<AllBpBusinessKey, ParsedPo> byBusinessKey = new LinkedHashMap<>();
+            List<ParsedPo> sourcePos = new ArrayList<>();
+            // Reject a repeated four-column identity anywhere in the same workbook,
+            // irrespective of Style, Destination, Qty or other ALL_BP fields.
+            Map<AllBpPoFourKeyGuard.Key, Integer> seenPoKeys = new LinkedHashMap<>();
             for (int rowIndex = headerRowIndex + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
                 Row row = sheet.getRow(rowIndex);
                 if (row == null) continue;
@@ -129,13 +143,16 @@ public class WorkflowService {
                 if (poNumber == null) continue;
 
                 String factory = factoryCol == null ? null : clean(excelSupport.text(row, factoryCol, evaluator));
-                if (factory == null) factory = clean(order.getProductionFacility());
+                if (factory == null) factory = clean(order.getFactoryCode());
                 factory = normalizeFactory(factory);
-                if (factory == null && !warnedMissingFactory) {
-                    warnings.add("Factory/Production Facility is not present in All_BP or on the Order. "
-                            + "POs were imported without a Factory; Factory is optional for the current LULULEMON workflow.");
-                    warnedMissingFactory = true;
+                if (factory == null) {
+                    throw new IllegalArgumentException("Factory is required in ALL_BP or Order for PO " + poNumber
+                            + " (row " + (rowIndex + 1) + "). Assign an active Factory before importing.");
                 }
+                factoryAccess.assertAssignedFactoryAccess(factory);
+                if (!factory.equalsIgnoreCase(order.getFactoryCode()))
+                    throw new IllegalArgumentException("ALL_BP row " + (rowIndex + 1) + " Factory " + factory
+                            + " differs from Order Factory " + order.getFactoryCode() + ".");
 
                 String style = clean(excelSupport.text(row, styleCol, evaluator));
                 int totalQty = requiredPositiveInt(excelSupport.decimal(row, qtyCol, evaluator), "Q'ty", rowIndex + 1);
@@ -171,16 +188,13 @@ public class WorkflowService {
                         List.of(captureAllBpRow(row, sourceColumns, evaluator))
                 );
 
-                AllBpBusinessKey businessKey = AllBpBusinessKey.from(candidate);
-                ParsedPo previous = byBusinessKey.putIfAbsent(businessKey, candidate);
-                if (previous != null) {
-                    ParsedPo merged = previous.mergeQuantity(candidate);
-                    byBusinessKey.put(businessKey, merged);
-                    warnings.add("PO " + poNumber + " has another All_BP row with the same DC Code, Destination, Channel, Master PO, PO, Packing Plan, SO (PTS), Style#, Description, Color and Size; row "
-                            + candidate.sourceLineNo() + " quantity/cartons were merged into the same record.");
-                }
+                AllBpPoFourKeyGuard.checkFileRow(seenPoKeys, candidate.masterPo(),
+                        candidate.poNumber(), candidate.packingPlan(), candidate.salesOrderPts(),
+                        candidate.sourceLineNo());
+                // No merging: duplicate four-column identities are a validation error.
+                sourcePos.add(candidate);
             }
-            parsed = new ArrayList<>(byBusinessKey.values());
+            parsed = sourcePos;
         } catch (IllegalArgumentException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -188,13 +202,22 @@ public class WorkflowService {
         }
 
         if (parsed.isEmpty()) throw new IllegalArgumentException(AppMessages.ALL_BP_EMPTY);
-        if (!replace && !sharedImport && !poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON).isEmpty()) {
-            throw new IllegalArgumentException(AppMessages.buyerDataAlreadyExists(AppConstants.Buyer.LULULEMON));
-        }
+        // Preflight the complete file BEFORE any update/save. This includes Sales Shared
+        // Import: an existing four-column identity is not a new PO, even if
+        // other ALL_BP fields differ. The check happens before any database write.
+        List<PurchaseOrder> savedPos = poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(
+                orderId, AppConstants.Buyer.LULULEMON);
+        AllBpPoFourKeyGuard.checkAgainstSaved(savedPos, parsed.stream()
+                .map(po -> AllBpPoFourKeyGuard.key(po.masterPo(), po.poNumber(),
+                        po.packingPlan(), po.salesOrderPts()))
+                .collect(Collectors.toSet()));
+        // Both upload entry points may append new four-key identities to an
+        // existing Order. Prior POs are never replaced by a regular upload;
+        // collisions have already been rejected by the preflight above.
         if (replace && !sharedImport) {
             // Safety invariant: legacy Replace cannot destroy PO picks.
-            boolean hasPicked = poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON)
-                    .stream().anyMatch(po -> po.getPickedBy() != null && !po.getPickedBy().isBlank());
+            boolean hasPicked = savedPos.stream()
+                    .anyMatch(po -> po.getPickedBy() != null && !po.getPickedBy().isBlank());
             if (hasPicked) throw new IllegalArgumentException("Picked PO exists: use Sales shared import, not Replace.");
             assertReplaceAllowed(orderId);
         }
@@ -202,8 +225,7 @@ public class WorkflowService {
         // Safety first: legacy destructive Replace could delete valid scan/carton records
         // before a later save fails. Production re-imports must use the incremental
         // shared import path; it preserves all operational records.
-        if (replace && !sharedImport && !poRepository
-                .findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON).isEmpty()) {
+        if (replace && !sharedImport && !savedPos.isEmpty()) {
             throw new IllegalArgumentException("Destructive All_BP Replace is disabled to protect carton/scan data. Use Sales Shared Import instead.");
         }
 
@@ -212,16 +234,9 @@ public class WorkflowService {
         List<PurchaseOrder> poBatch = new ArrayList<>(parsed.size());
         Map<AllBpBusinessKey, PurchaseOrder> existing = new HashMap<>();
         if (sharedImport) {
-            for (PurchaseOrder previous : poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON)) {
+            for (PurchaseOrder previous : savedPos) {
                 PurchaseOrder duplicate = existing.putIfAbsent(AllBpBusinessKey.from(previous), previous);
                 if (duplicate != null) throw new IllegalArgumentException("Duplicate existing PO business key: " + previous.getPoNumber());
-            }
-        }
-        Map<String, PurchaseOrder> previouslyPicked = new HashMap<>();
-        if (sharedImport) {
-            for (PurchaseOrder row : existing.values()) {
-                if (row.getPickedBy() != null && !row.getPickedBy().isBlank())
-                    previouslyPicked.putIfAbsent(row.getPoNumber(), row);
             }
         }
         int createdCount = 0;
@@ -268,17 +283,10 @@ public class WorkflowService {
             po.setBuyerCode(AppConstants.Buyer.LULULEMON);
             po.setOrderId(orderId);
             po.setSourceLineNo(parsedPo.sourceLineNo());
-            // Once a Packing picked a PO, Sales import must never change its Factory.
-            if (previous == null || (previous.getPickedBy() == null && previous.getFactoryCode() == null)) {
-                po.setFactoryCode(sharedImport ? null : parsedPo.factoryCode());
-            }
+            // Imported Packing data always belongs to its source Factory; it never
+            // inherits the user's future Factory selection.
+            po.setFactoryCode(parsedPo.factoryCode());
             po.setBuyerKey(AppConstants.Buyer.LULULEMON);
-            if (previous == null && sharedImport && previouslyPicked.containsKey(parsedPo.poNumber())) {
-                PurchaseOrder owner = previouslyPicked.get(parsedPo.poNumber());
-                po.setFactoryCode(owner.getFactoryCode());
-                po.setPickedBy(owner.getPickedBy());
-                po.setPickedAt(owner.getPickedAt());
-            }
             po.setDcCode(parsedPo.dcCode());
             po.setDestination(parsedPo.destination());
             po.setChannel(parsedPo.channel());
@@ -328,12 +336,7 @@ public class WorkflowService {
 
         Criteria criteria = Criteria.where("orderId").is(orderId).and("buyerCode").is(AppConstants.Buyer.LULULEMON);
         if (!factoryAccess.isUnrestricted()) {
-            // Factory is optional for LULULEMON. Restricted users may still work with
-            // unassigned POs; once a Factory is present, normal factory scoping applies.
-            Set<Object> allowedFactories = new HashSet<>(factoryAccess.accessibleFactories());
-            allowedFactories.add(null);
-            allowedFactories.add("");
-            criteria = criteria.and("factoryCode").in(allowedFactories);
+            criteria = criteria.and("factoryCode").in(factoryAccess.accessibleFactories());
         }
         String statusKey = clean(status);
         if (statusKey != null && !"ALL".equalsIgnoreCase(statusKey)) {
@@ -397,7 +400,8 @@ public class WorkflowService {
         // Retain operational identity and all carton/scan data after Packing or dispatch.
         // Non-structural ALL_BP metadata edits remain available until Weight completes.
         boolean picked = clean(po.getPickedBy()) != null;
-        boolean operational = hasPoOperationalActivity(po) || isAssignedToAnySchedule(po);
+        boolean operational = hasPoOperationalActivity(po) || isAssignedToAnySchedule(po)
+                || po.getPlannedShippingDate() != null;
         String originalNumber = po.getPoNumber();
         String originalFactory = normalizeFactory(po.getFactoryCode());
         String originalStyle = po.getStyleNumber();
@@ -426,6 +430,11 @@ public class WorkflowService {
 
         String factoryCode = normalizeFactory(request.factoryCode());
         if (factoryCode == null) factoryCode = normalizeFactory(po.getFactoryCode());
+        PackingOrder owningOrder = requireOrder(buyerCode, orderId);
+        if (factoryCode == null || !factoryCode.equalsIgnoreCase(owningOrder.getFactoryCode()))
+            throw new IllegalArgumentException("PO Factory must match its Order Factory.");
+        if (factoryCode != null && !factoryCode.equalsIgnoreCase(String.valueOf(po.getFactoryCode())))
+            factories.requireActive(AppConstants.Buyer.LULULEMON, factoryCode);
         // Factory is optional for LULULEMON. Only enforce factory permissions when a
         // concrete factory has actually been assigned.
         assertFactoryAccessIfPresent(factoryCode);
@@ -496,17 +505,11 @@ public class WorkflowService {
             po.setGrossWeightKg(request.grossWeightKg());
         }
 
-        AllBpBusinessKey desiredBusinessKey = AllBpBusinessKey.of(
-                po.getDcCode(), po.getDestination(), po.getChannel(), po.getMasterPo(), poNumber,
-                po.getPackingPlan(), po.getSalesOrderPts(), style, po.getDescription(), po.getColor(), po.getSize()
-        );
-        poRepository.findAllByOrderIdAndBuyerCodeAndPoNumber(orderId, AppConstants.Buyer.LULULEMON, poNumber).stream()
-                .filter(existing -> !Objects.equals(existing.getId(), po.getId()))
-                .filter(existing -> desiredBusinessKey.equals(AllBpBusinessKey.from(existing)))
-                .findFirst()
-                .ifPresent(existing -> {
-                    throw new IllegalArgumentException(AppMessages.allBpBusinessKeyAlreadyExists(poNumber));
-                });
+        // Editing must not bypass four-column identity, including case/space variants.
+        AllBpPoFourKeyGuard.checkEditAgainstSaved(
+                poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(
+                        orderId, AppConstants.Buyer.LULULEMON),
+                po.getId(), po.getMasterPo(), poNumber, po.getPackingPlan(), po.getSalesOrderPts());
 
         // Claim ownership is keyed by PO Number and Factory, not row ID. Never
         // silently move a picked PO into another claim (or change its number).
@@ -578,6 +581,9 @@ public class WorkflowService {
         requireOrder(buyerCode, orderId);
         PurchaseOrder po = requirePo(orderId, poId);
         assertFactoryAccessIfPresent(po.getFactoryCode());
+        if (po.getPlannedShippingDate() != null) {
+            throw new IllegalArgumentException("PO has a planned shipping date and cannot be deleted.");
+        }
         // Deletion is intentionally stricter than editing: a picked PO has a
         // claim used by Packing and may not be deleted until it is unpicked.
         assertPoWeighingNotCompleted(po);
@@ -1211,6 +1217,91 @@ public class WorkflowService {
         return carton;
     }
 
+    /**
+     * Operator correction immediately after Assign / Identify (BEFORE starting RFID).
+     * Undo SSCC and carton-label SKU together; keep PO master SKU, logical Item IDs
+     * and all audit history. Legacy Admin SSCC-unassign remains a separate action.
+     */
+    public synchronized Carton unassignNewCartonIdentity(String buyerCode, String orderId,
+                                                          String cartonId, ExceptionRequest request) {
+        requireOrder(buyerCode, orderId);
+        Carton carton = requireCarton(orderId, cartonId);
+        assertFactoryAccessIfPresent(carton.getFactoryCode());
+        String reason = requireReason(request);
+        String previousSscc = clean(carton.getSscc());
+        String previousSku = clean(carton.getLabelConfirmedSku());
+        if (previousSscc == null || carton.getLabelConfirmedAt() == null) {
+            throw new IllegalArgumentException("Carton SSCC + SKU have not been identified together.");
+        }
+        // An operator can correct their own recent identification. Admin may
+        // correct a colleague's identification, still subject to the history guards.
+        if (!factoryAccess.currentUser().isAdminRole()
+                && !Objects.equals(clean(carton.getSsccAssignedBy()), clean(RequestActor.current()))) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Only the user who assigned this SSCC or Admin can unassign it.");
+        }
+        // Do not allow this operator-level correction to destroy a real packed,
+        // inspected or weighed carton. The RFID session table is authoritative,
+        // including SCANNING/FAILED attempts and historical retries.
+        if (carton.getFinishedAt() != null || safeInt(carton.getScannedQty()) > 0
+                || clean(carton.getRfidSessionId()) != null || clean(carton.getRfidStatus()) != null
+                || clean(carton.getWeightStatus()) != null || carton.getWeighedAt() != null
+                || AppConstants.CartonStatus.FINISHED.equals(carton.getStatus())
+                || AppConstants.CartonStatus.READY_TO_SHIP.equals(carton.getStatus())
+                || AppConstants.CartonStatus.LABEL_CONFIRMED.equals(carton.getStatus())) {
+            throw new IllegalArgumentException("Carton already has packing/RFID/Weight activity. Use Admin review; unassign is only allowed before RFID starts.");
+        }
+        Query rfidHistory = Query.query(Criteria.where("cartonId").is(cartonId)
+                .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
+        if (mongoTemplate.exists(rfidHistory,
+                org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession.class)) {
+            throw new IllegalArgumentException("An RFID session already exists for this carton. Unassign is blocked to preserve its inspection history.");
+        }
+        Query weightHistory = Query.query(Criteria.where("cartonId").is(cartonId)
+                .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
+        if (mongoTemplate.exists(weightHistory, WeighingResult.class)) {
+            throw new IllegalArgumentException("Weight history exists for this carton. Unassign is blocked.");
+        }
+        List<CartonItem> itemSlots = itemRepository.findByCartonIdOrderByItemNoAsc(cartonId);
+        for (CartonItem item : itemSlots) {
+            if (AppConstants.ItemStatus.PASS.equals(item.getStatus())
+                    || clean(item.getScannedSku()) != null || clean(item.getRfidEpc()) != null
+                    || item.getRfidVerifiedAt() != null
+                    || (clean(item.getRfidStatus()) != null
+                        && !AppConstants.RfidStatus.WAITING_RFID.equals(item.getRfidStatus()))) {
+                throw new IllegalArgumentException("An Item already has scan/RFID results. Use Admin review instead.");
+            }
+        }
+        LocalDateTime now = LocalDateTime.now();
+        for (CartonItem item : itemSlots) {
+            item.setExpectedSku(null);
+            item.setStatus(AppConstants.ItemStatus.PENDING);
+            item.setRfidStatus(null);
+            item.setUpdatedAt(now);
+        }
+        if (!itemSlots.isEmpty()) itemRepository.saveAll(itemSlots);
+        carton.setSscc(null);
+        carton.setSsccAssignedAt(null);
+        carton.setSsccAssignedBy(null);
+        carton.setLabelConfirmedSku(null);
+        carton.setLabelConfirmedAt(null);
+        carton.setLabelConfirmedBy(null);
+        carton.setQtyConfirmedAt(null);
+        carton.setQtyConfirmedBy(null);
+        carton.setStatus(AppConstants.CartonStatus.READY_TO_PACK);
+        carton.setUpdatedAt(now);
+        carton.setUpdatedBy(RequestActor.current());
+        carton = cartonRepository.save(carton);
+        // The master PO SKU from ALL_BP remains unchanged. No Items are deleted.
+        audit(AppConstants.AuditAction.UNASSIGN_CARTON_IDENTITY, cartonId,
+                "Operator unassigned newly identified carton " + carton.getCartonNo()
+                    + " (PO " + carton.getPoNumber() + ", Factory " + carton.getFactoryCode()
+                    + "): SSCC " + previousSscc + ", SKU " + previousSku
+                    + ". Reason: " + reason + ". Preserved " + itemSlots.size() + " Item IDs and PO SKU.");
+        socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.SSCC_UNASSIGNED, cartonId);
+        return carton;
+    }
+
     public synchronized Carton unassignSscc(String buyerCode, String orderId, String cartonId, ExceptionRequest request) {
         requireOrder(buyerCode, orderId);
         String reason = requireReason(request);
@@ -1328,15 +1419,12 @@ public class WorkflowService {
     public List<ScanEvent> recentEvents(String buyerCode, String orderId) {
         requireOrder(buyerCode, orderId);
         Set<String> allowedFactories = new HashSet<>(factoryAccess.accessibleFactories());
-        // Factory is optional for the current LULULEMON workflow. Unassigned records
-        // stay visible to factory-scoped users instead of disappearing from trace/history.
-        allowedFactories.add(null);
-        allowedFactories.add("");
+        // Factory is mandatory on new Orders; unassigned historical events are Admin-only.
         boolean unrestricted = factoryAccess.isUnrestricted();
         Map<String, String> poFactory = poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON).stream()
                 .collect(Collectors.toMap(PurchaseOrder::getId, PurchaseOrder::getFactoryCode, (a, b) -> a));
         return scanEventRepository.findTop100ByOrderIdAndBuyerCodeOrderByCreatedAtDesc(orderId, AppConstants.Buyer.LULULEMON).stream()
-                .filter(event -> unrestricted || event.getPoId() == null || allowedFactories.contains(normalizeFactory(poFactory.get(event.getPoId()))))
+                .filter(event -> unrestricted || (event.getPoId() != null && allowedFactories.contains(normalizeFactory(poFactory.get(event.getPoId())))))
                 .toList();
     }
 
@@ -1348,7 +1436,9 @@ public class WorkflowService {
         return new PoSummary(po, finished, assigned, progress.scannedQty(), progress.scannedCartons(),
                 progress.scannedFullCartons(), progress.scannedRemainderQty(), progress.scannedRemainderCartons(),
                 progress.identifiedQty(), progress.identifiedCartons(), progress.identifiedFullCartons(),
-                progress.identifiedRemainderQty(), progress.identifiedRemainderCartons());
+                progress.identifiedRemainderQty(), progress.identifiedRemainderCartons(),
+                progress.completedQty(), progress.completedCartons(), progress.completedFullCartons(),
+                progress.completedRemainderQty(), progress.completedRemainderCartons());
     }
 
     private void refreshPoStatus(PurchaseOrder po) {
@@ -1489,12 +1579,19 @@ public class WorkflowService {
 
     private boolean canAccessFactoryOrUnassigned(String factoryCode) {
         String normalized = normalizeFactory(factoryCode);
-        return normalized == null || factoryAccess.canAccessFactory(normalized);
+        // Legacy factory-less data remains Admin-only, not visible to regular users.
+        if (normalized == null) return factoryAccess.isUnrestricted();
+        return factoryAccess.canAccessFactory(normalized)
+                || (factoryAccess.currentUser().canWeightCheck()
+                    && factoryAccess.canAccessWeighingFactory(normalized));
     }
 
     private void assertFactoryAccessIfPresent(String factoryCode) {
         String normalized = normalizeFactory(factoryCode);
-        if (normalized != null) factoryAccess.assertFactoryAccess(normalized);
+        if (normalized != null && !factoryAccess.canAccessFactory(normalized)
+                && !(factoryAccess.currentUser().canWeightCheck()
+                    && factoryAccess.canAccessWeighingFactory(normalized)))
+            throw new org.springframework.security.access.AccessDeniedException("Factory access denied: " + normalized);
     }
 
     private PackingOrder requireOrder(String buyerCode, String orderId) {

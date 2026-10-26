@@ -2,6 +2,7 @@ package org.bsl.cartonloading.buyers.lululemon.dto;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 
 public record CartonWeightAssignmentRow(
         String orderId,
@@ -26,5 +27,16 @@ public record CartonWeightAssignmentRow(
         String weightStatus,
         String rfidStatus,
         String stationCode,
-        LocalDateTime weighedAt
+        LocalDateTime weighedAt,
+        BigDecimal expectedWeightKg,
+        BigDecimal minAllowedWeightKg,
+        BigDecimal maxAllowedWeightKg,
+        BigDecimal actualWeightKg,
+        Integer rfidScannedQty,
+        Integer rfidExpectedQty,
+        Integer rfidReadCount,
+        String rfidReason,
+        Integer rfidWrongSkuCount,
+        Integer rfidInvalidReadCount,
+        Integer rfidCrossCartonCount
 ) { }

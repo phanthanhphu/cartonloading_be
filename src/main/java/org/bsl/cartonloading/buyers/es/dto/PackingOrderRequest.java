@@ -25,6 +25,7 @@ public record PackingOrderRequest(
         String supplierNumber,
 
         @Size(max = 120, message = AppMessages.PRODUCTION_FACILITY_MAX_120)
-        String productionFacility
+        String productionFacility,
+        String factoryCode
 ) {
 }

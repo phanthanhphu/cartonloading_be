@@ -29,6 +29,7 @@ public class WeighingService {
     private final CartonRepository cartonRepository;
     private final WeighingOrderRepository weighingOrderRepository;
     private final WeighingResultRepository weightEventRepository;
+    private final RfidScanSessionRepository rfidSessionRepository;
     private final ShippingScheduleRepository shippingScheduleRepository;
     private final PackingOrderService orderService;
     private final BuyerFactoryAccessService factoryAccess;
@@ -40,6 +41,7 @@ public class WeighingService {
             CartonRepository cartonRepository,
             WeighingOrderRepository weighingOrderRepository,
             WeighingResultRepository weightEventRepository,
+            RfidScanSessionRepository rfidSessionRepository,
             ShippingScheduleRepository shippingScheduleRepository,
             PackingOrderService orderService,
             BuyerFactoryAccessService factoryAccess,
@@ -50,6 +52,7 @@ public class WeighingService {
         this.cartonRepository = cartonRepository;
         this.weighingOrderRepository = weighingOrderRepository;
         this.weightEventRepository = weightEventRepository;
+        this.rfidSessionRepository = rfidSessionRepository;
         this.shippingScheduleRepository = shippingScheduleRepository;
         this.orderService = orderService;
         this.factoryAccess = factoryAccess;
@@ -181,6 +184,15 @@ public class WeighingService {
             if (weighingOrder.getCartonIds() != null && !weighingOrder.getCartonIds().isEmpty()) {
                 cartonRepository.findAllById(weighingOrder.getCartonIds()).forEach(cartons::add);
             }
+            // Batch-fetch only the current factory-scoped shipment's RFID history.
+            // The latest session (including an unfinished rescan) supplies unique EPC progress.
+            Map<String, RfidScanSession> latestRfidByCarton = new HashMap<>();
+            if (!cartons.isEmpty()) {
+                List<String> cartonIds = cartons.stream().map(Carton::getId).toList();
+                rfidSessionRepository.findByBuyerCodeAndCartonIdInOrderByStartedAtDesc(
+                        AppConstants.Buyer.LULULEMON, cartonIds
+                ).forEach(session -> latestRfidByCarton.putIfAbsent(session.getCartonId(), session));
+            }
             cartons.stream()
                     .sorted(Comparator.comparing(Carton::getPoNumber, Comparator.nullsLast(Comparator.naturalOrder()))
                             .thenComparing(Carton::getCartonNo, Comparator.nullsLast(Comparator.naturalOrder())))
@@ -191,6 +203,25 @@ public class WeighingService {
                         int qty = carton.getScannedQty() != null && carton.getScannedQty() > 0
                                 ? carton.getScannedQty()
                                 : (carton.getPlannedQty() == null ? 0 : carton.getPlannedQty());
+                        // Historical weighings show the saved snapshot; unweighed cartons use
+                        // exactly the same ALL_BP gross-weight formula as SSCC lookup.
+                        WeightProfile profile = po == null ? null : derivedWeightProfileOrNull(po);
+                        BigDecimal expected = carton.getExpectedWeightKg() != null
+                                ? carton.getExpectedWeightKg()
+                                : profile == null ? null : expectedWeight(carton, profile);
+                        BigDecimal tolerance = carton.getWeightToleranceKg() != null
+                                ? carton.getWeightToleranceKg()
+                                : profile == null ? null : profile.getToleranceKg();
+                        BigDecimal minAllowed = expected != null && tolerance != null
+                                ? expected.subtract(tolerance).setScale(3, RoundingMode.HALF_UP) : null;
+                        BigDecimal maxAllowed = expected != null && tolerance != null
+                                ? expected.add(tolerance).setScale(3, RoundingMode.HALF_UP) : null;
+                        RfidScanSession rfid = latestRfidByCarton.get(carton.getId());
+                        int rfidCount = rfid != null && rfid.getActualQty() != null
+                                ? rfid.getActualQty()
+                                : carton.getRfidVerifiedQty() == null ? 0 : carton.getRfidVerifiedQty();
+                        int rfidExpected = rfid != null && rfid.getExpectedQty() != null
+                                ? rfid.getExpectedQty() : qty;
                         rows.add(new CartonWeightAssignmentRow(
                                 packingOrder.getId(), packingOrder.getOrderName(), packingOrder.getOrderDate(),
                                 schedule.getId(), schedule.getScheduleNo(), schedule.getFactoryCode(), schedule.getExFtyDate(),
@@ -198,7 +229,13 @@ public class WeighingService {
                                 po == null ? carton.getPoNumber() : po.getPoNumber(), po == null ? null : po.getSku(),
                                 po == null ? null : po.getStyle(), po == null ? null : po.getColor(), po == null ? null : po.getSize(),
                                 carton.getId(), carton.getCartonNo(), qty, carton.getSscc(), normalizeWeightStatus(carton.getWeightStatus()), carton.getRfidStatus(),
-                                carton.getWeightStationCode(), carton.getWeighedAt()
+                                carton.getWeightStationCode(), carton.getWeighedAt(),
+                                expected, minAllowed, maxAllowed, carton.getActualWeightKg(),
+                                rfidCount, rfidExpected, rfid == null ? 0 : rfid.getReadCount(),
+                                rfid == null ? null : rfid.getReason(),
+                                rfid == null || rfid.getWrongSkuEpcs() == null ? 0 : rfid.getWrongSkuEpcs().size(),
+                                rfid == null || rfid.getInvalidReads() == null ? 0 : rfid.getInvalidReads().size(),
+                                rfid == null || rfid.getCrossCartonEpcs() == null ? 0 : rfid.getCrossCartonEpcs().size()
                         ));
                     });
         }
@@ -284,7 +321,22 @@ public class WeighingService {
         List<CartonWeightHistoryRow> rows = new ArrayList<>();
         for (WeighingResult result : weightEventRepository.findByBuyerCodeOrderByCreatedAtDesc(AppConstants.Buyer.LULULEMON)) {
             String scheduleId = clean(result.getShippingScheduleId());
-            if (scheduleId == null) continue;
+            // Direct Carton Processing saves no Shipping Schedule/Weighing Order.
+            // Include those events in the SAME history UI as legacy shipped cartons.
+            if (scheduleId == null) {
+                if (result.getCartonId() == null) continue;
+                Carton carton = cartonRepository.findById(result.getCartonId()).orElse(null);
+                if (carton == null || !factoryAccess.canAccessAssignedFactory(carton.getFactoryCode())) continue;
+                PackingOrder directOrder;
+                try {
+                    directOrder = orderCache.computeIfAbsent(result.getOrderId(), id ->
+                            orderService.getEntity(AppConstants.Buyer.LULULEMON, id));
+                } catch (RuntimeException ex) { directOrder = null; }
+                rows.add(new CartonWeightHistoryRow(result,
+                        directOrder == null ? result.getOrderId() : directOrder.getOrderName(),
+                        null, carton.getFactoryCode(), null));
+                continue;
+            }
             String scheduleKey = result.getOrderId() + "::" + scheduleId;
             ShippingSchedule schedule = scheduleCache.computeIfAbsent(scheduleKey, key -> shippingScheduleRepository
                     .findByIdAndOrderIdAndBuyerCode(scheduleId, result.getOrderId(), AppConstants.Buyer.LULULEMON)

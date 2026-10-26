@@ -21,6 +21,12 @@ public class LululemonTestCleanupController {
 
     public record PurgeRequest(String confirmation) {}
 
+    @GetMapping("/preview")
+    @PreAuthorize("@accessControl.isAdmin() and @accessControl.canAccessBuyer(#buyer)")
+    public Map<String, Object> preview(@PathVariable String buyer, @PathVariable String orderId) {
+        return service.preview(buyer, orderId);
+    }
+
     @PostMapping("/purge")
     @PreAuthorize("@accessControl.isAdmin() and @accessControl.canAccessBuyer(#buyer)")
     public Map<String, Object> purge(@PathVariable String buyer,

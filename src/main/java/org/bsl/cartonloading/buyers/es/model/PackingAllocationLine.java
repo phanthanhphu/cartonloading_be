@@ -20,6 +20,8 @@ public class PackingAllocationLine {
     private String id;
 
     private String buyerCode;
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey;
     private String orderId;
     private Integer lineNo;
 

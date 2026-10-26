@@ -23,6 +23,12 @@ public class UserDTO {
     private boolean canWeightCheck;
     private boolean viewOnly;
     private List<String> buyerPermissions = new ArrayList<>();
+    private List<org.bsl.cartonloading.model.BuyerTypePermission> buyerTypePermissions = new ArrayList<>();
+    public List<org.bsl.cartonloading.model.BuyerTypePermission> getBuyerTypePermissions() { return List.copyOf(buyerTypePermissions); }
+    public void setBuyerTypePermissions(List<org.bsl.cartonloading.model.BuyerTypePermission> value) {
+        buyerTypePermissions = value == null ? new ArrayList<>() : new ArrayList<>(value);
+    }
+
     private List<String> factoryPermissions = new ArrayList<>();
     private List<String> weighingFactoryPermissions = new ArrayList<>();
 

@@ -3,6 +3,7 @@ package org.bsl.cartonloading.controller;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
+import org.bsl.cartonloading.model.SystemType;
 import org.bsl.cartonloading.security.JwtUtil;
 import org.bsl.cartonloading.service.BuyerService;
 import org.bsl.cartonloading.service.UserService;
@@ -62,17 +63,28 @@ public class AuthController {
                     .body(Map.of("message", AppMessages.SELECTED_BUYER_ACCESS_DENIED));
         }
 
+        String selectedType = SystemType.normalize(loginRequest.getSystemType());
+        if (selectedType.isEmpty()) return ResponseEntity.badRequest().body(Map.of("message", "Please select a valid system Type"));
+        if (!buyerService.supportsType(selectedBuyer, selectedType))
+            return ResponseEntity.status(403).body(Map.of("message", "Buyer " + selectedBuyer + " does not support " + selectedType));
+        if (!SystemType.hasImplementedWorkflow(selectedBuyer, selectedType))
+            return ResponseEntity.status(403).body(Map.of("message", "This Buyer / Type workflow has not been implemented yet"));
+        if (!user.canAccessBuyerType(selectedBuyer, selectedType))
+            return ResponseEntity.status(403).body(Map.of("message", "Bạn không có quyền truy cập Buyer " + selectedBuyer + " với Type " + selectedType));
+
         String token = jwtUtil.generateToken(
                 user.getEmail(),
                 user.getRole(),
                 user.getTokenVersion(),
                 user.getAccessPermissions(),
-                user.getBuyerPermissions()
+                user.getBuyerPermissions(),
+                selectedBuyer, selectedType
         );
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("token", token);
         response.put("user", userService.toUserDTO(user));
         response.put("selectedBuyer", selectedBuyer);
+        response.put("selectedType", selectedType);
         return ResponseEntity.ok(response);
     }
 
@@ -80,6 +92,9 @@ public class AuthController {
         private String email;
         private String password;
         private String buyerCode;
+        private String systemType;
+        public String getSystemType() { return systemType; }
+        public void setSystemType(String systemType) { this.systemType = systemType; }
         public String getEmail() { return email; }
         public void setEmail(String email) { this.email = email; }
         public String getPassword() { return password; }

@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 /** Append-only QC inspection result, independent of packing/RFID/weighing states. */
 @Data
 @NoArgsConstructor
-@Document(collection = AppConstants.Collection.LULULEMON_CARTON_CHECKING)
+@Document(collection = AppConstants.Collection.CARTON_CHECKING_HISTORY)
 public class CartonCheckingRecord {
     @Id private String id;
     private String buyerCode;

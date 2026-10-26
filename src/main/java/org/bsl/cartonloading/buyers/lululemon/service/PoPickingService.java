@@ -8,8 +8,9 @@ import org.bsl.cartonloading.buyers.lululemon.model.PoPickClaim;
 import org.bsl.cartonloading.buyers.lululemon.model.PoPickEvent;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonRepository;
-import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
+    import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
 import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.service.FactoryCatalogService;
 import org.bsl.cartonloading.model.User;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -27,10 +28,11 @@ public class PoPickingService {
     private final PackingOrderService orders;
     private final BuyerFactoryAccessService access;
     private final MongoTemplate mongo;
+    private final FactoryCatalogService factories;
 
     public PoPickingService(PurchaseOrderRepository pos, CartonRepository cartons,
-            PackingOrderService orders, BuyerFactoryAccessService access, MongoTemplate mongo) {
-        this.pos = pos; this.cartons = cartons; this.orders = orders; this.access = access; this.mongo = mongo;
+            PackingOrderService orders, BuyerFactoryAccessService access, MongoTemplate mongo, FactoryCatalogService factories) {
+        this.pos = pos; this.cartons = cartons; this.orders = orders; this.access = access; this.mongo = mongo; this.factories = factories;
     }
 
     public record PickRow(String buyerKey, String orderId, String poNumber, String factoryCode,
@@ -48,13 +50,13 @@ public class PoPickingService {
 
     private String claimId(String orderId, String poNumber) {
         // URL-safe stable ID; includes buyer and order, no ambiguous separators.
-        return "LULULEMON:" + Base64.getUrlEncoder().withoutPadding().encodeToString(orderId.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        return AppConstants.Buyer.LULULEMON + ":" + Base64.getUrlEncoder().withoutPadding().encodeToString(orderId.getBytes(java.nio.charset.StandardCharsets.UTF_8))
                 + ":" + Base64.getUrlEncoder().withoutPadding().encodeToString(poNumber.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     private String factory(String value) {
         String normalized = User.normalizeFactoryCode(value);
-        if (!normalized.matches("F[1-7]")) throw new IllegalArgumentException("Factory must be F1..F7");
+        factories.requireActive(AppConstants.Buyer.LULULEMON, normalized);
         return normalized;
     }
 
@@ -67,8 +69,8 @@ public class PoPickingService {
     }
 
     private void requirePacking(User user) {
-        if (!user.isAdminRole() && !user.canAssignBarcode()) {
-            throw new AccessDeniedException("Packing permission required");
+        if (!user.isAdminRole() && !user.canPickPo()) {
+            throw new AccessDeniedException("PO Picking permission required");
         }
     }
 
@@ -88,7 +90,9 @@ public class PoPickingService {
             // A historical PO may have a pickedBy value but no claim document.
             // Never display such a PO as available in the shared pool.
             boolean legacyOwner = first.getPickedBy() != null && !first.getPickedBy().isBlank();
-            response.add(new PickRow("LULULEMON", orderId, number,
+            String rowFactory = claim == null ? first.getFactoryCode() : claim.getFactoryCode();
+            if (!access.isUnrestricted() && rowFactory != null && !rowFactory.isBlank() && !access.canAccessAssignedFactory(rowFactory)) continue;
+            response.add(new PickRow(AppConstants.Buyer.LULULEMON, orderId, number,
                     claim == null ? first.getFactoryCode() : claim.getFactoryCode(),
                     claim == null ? first.getPickedBy() : claim.getPickedBy(),
                     claim == null ? first.getPickedAt() : claim.getPickedAt(),
@@ -100,7 +104,12 @@ public class PoPickingService {
     /** Immutable audit history, scoped to buyer and parent Order. */
     public List<PoPickEvent> history(String buyer, String orderId, String poNumber) {
         verifyBuyer(buyer, orderId);
-        return mongo.find(Query.query(Criteria.where("buyer_key").is("LULULEMON")
+        if (!access.isUnrestricted()) {
+            for (PurchaseOrder row : lines(orderId, poNumber)) {
+                if (row.getFactoryCode() != null && !row.getFactoryCode().isBlank()) access.assertAssignedFactoryAccess(row.getFactoryCode());
+            }
+        }
+        return mongo.find(Query.query(Criteria.where("buyer_key").is(AppConstants.Buyer.LULULEMON)
                         .and("orderId").is(orderId).and("poNumber").is(poNumber))
                         .with(org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "createdAt")),
                 PoPickEvent.class);
@@ -129,7 +138,7 @@ public class PoPickingService {
         User user = access.currentUser();
         requirePacking(user);
         String selectedFactory = factory(targetFactory);
-        if (!user.isAdminRole() && !user.getFactoryPermissions().contains(selectedFactory)) {
+        if (!user.isAdminRole() && !access.canAccessAssignedFactory(selectedFactory)) {
             throw new AccessDeniedException("Packing user is not assigned to " + selectedFactory);
         }
         List<PurchaseOrder> rows = lines(orderId, poNumber);
@@ -160,15 +169,15 @@ public class PoPickingService {
         }
         try {
             List<String> ids = rows.stream().map(PurchaseOrder::getId).toList();
-            Query q = Query.query(Criteria.where("_id").in(ids).and("buyerCode").is("LULULEMON").and("orderId").is(orderId));
-            mongo.updateMulti(q, new Update().set("buyer_key", "LULULEMON").set("factoryCode", selectedFactory)
+            Query q = Query.query(Criteria.where("_id").in(ids).and("buyerCode").is(AppConstants.Buyer.LULULEMON).and("orderId").is(orderId));
+            mongo.updateMulti(q, new Update().set("buyer_key", AppConstants.Buyer.LULULEMON).set("factoryCode", selectedFactory)
                 .set("pickedBy", user.getEmail()).set("pickedAt", claim.getPickedAt()), PurchaseOrder.class);
         } catch (RuntimeException ex) {
             mongo.remove(Query.query(Criteria.where("_id").is(claim.getId())), PoPickClaim.class);
             throw ex;
         }
         audit(orderId, poNumber.trim(), selectedFactory, user.getEmail(), "PICK");
-        return new PickRow("LULULEMON", orderId, poNumber.trim(), selectedFactory,
+        return new PickRow(AppConstants.Buyer.LULULEMON, orderId, poNumber.trim(), selectedFactory,
                 user.getEmail(), claim.getPickedAt(), "ACTIVE", rows.size());
     }
 
@@ -187,6 +196,7 @@ public class PoPickingService {
         if (!"ACTIVE".equals(claim.getState())) {
             throw new IllegalArgumentException("PO is being modified. Refresh and retry");
         }
+        if (!user.isAdminRole()) access.assertAssignedFactoryAccess(claim.getFactoryCode());
         String actorEmail = user.getEmail();
         boolean otherPacking = !actorEmail.equalsIgnoreCase(claim.getPickedBy());
         String trimmedReason = reason == null ? "" : reason.trim();
@@ -205,9 +215,10 @@ public class PoPickingService {
         if (locked == null) throw new IllegalArgumentException("PO is being modified. Refresh and retry");
         try {
             Query q = Query.query(Criteria.where("_id").in(rows.stream().map(PurchaseOrder::getId).toList())
-                    .and("buyerCode").is("LULULEMON").and("orderId").is(orderId));
+                    .and("buyerCode").is(AppConstants.Buyer.LULULEMON).and("orderId").is(orderId));
             Update u = new Update().set("factoryCode", claim.getOriginalFactoryCode())
                     .unset("pickedBy").unset("pickedAt");
+
             mongo.updateMulti(q, u, PurchaseOrder.class);
             mongo.remove(Query.query(Criteria.where("_id").is(id).and("state").is("RELEASING")), PoPickClaim.class);
         } catch (RuntimeException ex) {
@@ -216,6 +227,6 @@ public class PoPickingService {
         }
         audit(orderId, poNumber.trim(), claim.getFactoryCode(), actorEmail, "UNPICK",
                 claim.getPickedBy(), trimmedReason.isEmpty() ? null : trimmedReason);
-        return new PickRow("LULULEMON", orderId, poNumber.trim(), claim.getOriginalFactoryCode(), null, null, "UNPICKED", rows.size());
+        return new PickRow(AppConstants.Buyer.LULULEMON, orderId, poNumber.trim(), claim.getOriginalFactoryCode(), null, null, "UNPICKED", rows.size());
     }
 }

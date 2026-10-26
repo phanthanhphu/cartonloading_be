@@ -18,6 +18,9 @@ public class PackingOrder {
     private String id;
 
     private String buyerCode;
+    /** Same physical orders collection for all buyers; business identity is retained separately. */
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey;
 
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate orderDate;
@@ -29,6 +32,8 @@ public class PackingOrder {
     private String supplierName;
     private String supplierNumber;
     private String productionFacility;
+    /** LULULEMON order ownership; not a free-text production facility. */
+    private String factoryCode;
 
     private String createdBy;
     private String updatedBy;

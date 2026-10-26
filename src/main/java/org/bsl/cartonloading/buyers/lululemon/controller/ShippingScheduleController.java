@@ -18,19 +18,19 @@ public class ShippingScheduleController {
     }
 
     @GetMapping
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode() or @accessControl.canWeightCheck())")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode() or @accessControl.canWeightCheck() or @accessControl.canAssignWeight())")
     public List<ShippingScheduleSummary> list(@PathVariable String buyer, @PathVariable String orderId) {
         return service.list(buyer, orderId);
     }
 
     @GetMapping("/{scheduleId}")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode() or @accessControl.canWeightCheck())")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode() or @accessControl.canWeightCheck() or @accessControl.canAssignWeight())")
     public ShippingScheduleDetail detail(@PathVariable String buyer, @PathVariable String orderId, @PathVariable String scheduleId) {
         return service.detail(buyer, orderId, scheduleId);
     }
 
     @PostMapping
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode())")
+    @PreAuthorize("denyAll()")
     public ShippingScheduleDetail create(
             @PathVariable String buyer,
             @PathVariable String orderId,
@@ -40,7 +40,7 @@ public class ShippingScheduleController {
     }
 
     @DeleteMapping("/{scheduleId}")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize("denyAll()")
     public void remove(
             @PathVariable String buyer,
             @PathVariable String orderId,
@@ -50,7 +50,7 @@ public class ShippingScheduleController {
     }
 
     @PostMapping("/{scheduleId}/check")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canAssignBarcode() or @accessControl.canManageSales())")
+    @PreAuthorize("denyAll()")
     public ShippingScheduleDetail check(
             @PathVariable String buyer,
             @PathVariable String orderId,
@@ -60,7 +60,7 @@ public class ShippingScheduleController {
     }
 
     @PostMapping("/{scheduleId}/send-to-carton-weight")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canAssignBarcode() or @accessControl.canManageSales())")
+    @PreAuthorize("denyAll()")
     public ShippingScheduleDetail sendToCartonWeight(
             @PathVariable String buyer,
             @PathVariable String orderId,
@@ -70,7 +70,7 @@ public class ShippingScheduleController {
     }
 
     @GetMapping("/{scheduleId}/weight-history")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode() or @accessControl.canWeightCheck())")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canManageSales() or @accessControl.canAssignBarcode() or @accessControl.canWeightCheck() or @accessControl.canAssignWeight())")
     public List<WeighingResult> weightHistory(
             @PathVariable String buyer,
             @PathVariable String orderId,

@@ -15,6 +15,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -31,15 +32,19 @@ public class UserAdminService {
     private final PasswordEncoder passwordEncoder;
     private final UserService userService;
     private final AuditLogService audit;
+    private final FactoryCatalogService factories;
+    private final AppSocketPublisher socketPublisher;
 
     public UserAdminService(UserRepository userRepository, DepartmentRepository departmentRepository, BuyerRepository buyerRepository,
-                            PasswordEncoder passwordEncoder, UserService userService, AuditLogService audit) {
+                            PasswordEncoder passwordEncoder, UserService userService, AuditLogService audit, FactoryCatalogService factories, AppSocketPublisher socketPublisher) {
         this.userRepository = userRepository;
         this.departmentRepository = departmentRepository;
         this.buyerRepository = buyerRepository;
         this.passwordEncoder = passwordEncoder;
         this.userService = userService;
         this.audit = audit;
+        this.factories = factories;
+        this.socketPublisher = socketPublisher;
     }
 
     public Page<UserDTO> list(String username, String email, String phone, String address,
@@ -76,6 +81,7 @@ public class UserAdminService {
         apply(user, request, true);
         User saved = userRepository.save(user);
         audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.USER, saved.getId(), AppMessages.userCreatedAudit(saved.getEmail()), null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.CREATE);
         return userService.toUserDTO(saved);
     }
 
@@ -88,6 +94,7 @@ public class UserAdminService {
         user.setTokenVersion(user.getTokenVersion() + 1);
         User saved = userRepository.save(user);
         audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.USER, saved.getId(), AppMessages.userUpdatedAudit(saved.getEmail()), null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.UPDATE);
         return userService.toUserDTO(saved);
     }
 
@@ -124,6 +131,7 @@ public class UserAdminService {
 
         audit.log(RequestActor.current(), action, AppConstants.AuditResource.USER, saved.getId(),
                 AppMessages.userPasswordResetAudit(saved.getEmail()), null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, action);
     }
 
     private String validatePassword(String password) {
@@ -161,6 +169,7 @@ public class UserAdminService {
         }
         userRepository.delete(user);
         audit.log(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.USER, id, AppMessages.userDeletedAudit(user.getEmail()), null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.DELETE);
     }
 
     private void apply(User user, UserAdminRequest request, boolean creating) {
@@ -178,9 +187,35 @@ public class UserAdminService {
         user.setDepartmentId(departmentId);
         user.setAccessPermissions(request.accessPermissions());
         user.setBuyerPermissions(request.buyerPermissions());
+        if (request.buyerTypePermissions() != null) {
+            user.setBuyerTypePermissions(request.buyerTypePermissions());
+        } else if (creating) {
+            // Older API clients can create accounts with just Buyer permissions;
+            // default only to the two pre-existing, implemented workflow grants.
+            user.setBuyerTypePermissions(user.getBuyerPermissions().stream()
+                    .filter(b -> !org.bsl.cartonloading.model.SystemType.legacyBuyerTypes(b).isEmpty())
+                    .map(b -> new org.bsl.cartonloading.model.BuyerTypePermission(
+                            b, org.bsl.cartonloading.model.SystemType.legacyBuyerTypes(b))).toList());
+        }
+
         user.setFactoryPermissions(request.factoryPermissions());
         if (request.weighingFactoryPermissions() != null) user.setWeighingFactoryPermissions(request.weighingFactoryPermissions());
 
+        if (!user.isAdminRole() && user.canAccessBuyer(AppConstants.Buyer.LULULEMON)) {
+            if (user.getFactoryPermissions().isEmpty())
+                throw new IllegalArgumentException("Assign at least one active Factory to LULULEMON user");
+            for (String code : user.getFactoryPermissions()) factories.requireActive(AppConstants.Buyer.LULULEMON, code);
+            for (String code : user.getWeighingFactoryPermissions()) {
+                factories.requireActive(AppConstants.Buyer.LULULEMON, code);
+                if (!user.getFactoryPermissions().contains(code))
+                    throw new IllegalArgumentException("Weighing Factory must also be in assigned Factories: " + code);
+            }
+            if (departmentId != null) {
+                String departmentFactory = departmentRepository.findById(departmentId).orElseThrow().getFactory();
+                if (!user.getFactoryPermissions().contains(departmentFactory))
+                    throw new IllegalArgumentException("Department Factory must belong to the User's assigned Factories");
+            }
+        }
         if (!user.isAdminRole() && user.getBuyerPermissions().isEmpty()) {
             throw new IllegalArgumentException(AppMessages.BUYER_PERMISSION_REQUIRED);
         }
@@ -191,6 +226,23 @@ public class UserAdminService {
                 if (!buyer.isActive()) {
                     throw new IllegalArgumentException(AppMessages.buyerInactive(buyerCode));
                 }
+            }
+        }
+        if (!user.isAdminRole()) {
+            for (org.bsl.cartonloading.model.BuyerTypePermission grant : user.getBuyerTypePermissions()) {
+                if (!user.getBuyerPermissions().contains(grant.buyerCode()))
+                    throw new IllegalArgumentException("Type grant Buyer not assigned: " + grant.buyerCode());
+                Buyer buyer = buyerRepository.findByBuyerKeyIgnoreCase(grant.buyerCode())
+                        .orElseThrow(() -> new IllegalArgumentException("Buyer not found: " + grant.buyerCode()));
+                for (String type : grant.types()) {
+                    if (!buyer.supportsType(type))
+                        throw new IllegalArgumentException("Buyer " + grant.buyerCode() + " does not support " + type);
+                }
+            }
+            for (String buyerCode : user.getBuyerPermissions()) {
+                if (user.getBuyerTypePermissions().stream()
+                        .noneMatch(grant -> buyerCode.equals(grant.buyerCode()) && !grant.types().isEmpty()))
+                    throw new IllegalArgumentException("Select at least one System Type for Buyer " + buyerCode);
             }
         }
         if (creating || clean(request.password()) != null) {

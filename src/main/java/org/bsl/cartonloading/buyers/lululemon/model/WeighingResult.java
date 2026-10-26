@@ -36,6 +36,8 @@ public class WeighingResult {
     private BigDecimal toleranceKg;
     private String result;
     private String stationCode;
+    /** Single-use simulator event identifier, null for other weighing sources. */
+    private String scaleEventId;
     private String source;
     private Boolean stable;
     private String reason;

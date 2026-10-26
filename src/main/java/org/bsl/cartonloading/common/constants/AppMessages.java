@@ -238,7 +238,7 @@ public final class AppMessages {
     public static final String DEPARTMENT_ALREADY_EXISTS = "Department already exists for this Factory and Division";
     public static final String DEPARTMENT_NOT_FOUND = "Department not found";
     public static final String DEPARTMENT_ASSIGNED_TO_USERS = "Department is assigned to one or more users";
-    public static final String FACTORY_RANGE_F1_F7 = "Factory must be F1 to F7";
+    public static final String FACTORY_CODE_INVALID = "Factory code must be F1, F2, ... Fn";
     public static final String PASSWORD_REQUIRED = "Password is required";
     public static final String EMAIL_ALREADY_EXISTS = "Email already exists";
     public static final String PASSWORD_ENCODING_FAILED = "Password encoding verification failed";
@@ -310,6 +310,31 @@ public final class AppMessages {
 
     public static String poAlreadyExists(String poNumber) {
         return "PO " + poNumber + " already exists in this Order.";
+    }
+
+    public static String duplicateAllBpFourKeyInFile(String masterPo, String poNumber,
+                                                       String packingPlan, String salesOrderPts,
+                                                       int firstRow, int duplicateRow) {
+        return "Duplicate ALL_BP record: Master PO '" + masterPo
+                + "', PO '" + poNumber + "', Packing Plan '" + packingPlan
+                + "', SO (PTS) '" + salesOrderPts + "' appear in Excel rows "
+                + firstRow + " and " + duplicateRow
+                + ". Upload rejected. No purchase orders were imported.";
+    }
+
+    public static String duplicateAllBpFourKeyAlreadySaved(String masterPo, String poNumber,
+                                                             String packingPlan, String salesOrderPts) {
+        return "Duplicate ALL_BP record already exists in this Order: Master PO '" + masterPo
+                + "', PO '" + poNumber + "', Packing Plan '" + packingPlan
+                + "', SO (PTS) '" + salesOrderPts
+                + "'. Upload rejected. No purchase orders were imported.";
+    }
+
+    public static String duplicateAllBpFourKeyOnEdit(String masterPo, String poNumber,
+                                                      String packingPlan, String salesOrderPts) {
+        return "Cannot save purchase order: Master PO '" + masterPo + "', PO '" + poNumber
+                + "', Packing Plan '" + packingPlan + "', SO (PTS) '" + salesOrderPts
+                + "' already exist in this Order.";
     }
 
     public static String allBpBusinessKeyAlreadyExists(String poNumber) {

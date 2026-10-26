@@ -39,6 +39,7 @@ public class UserService {
         dto.setCanWeightCheck(user.canWeightCheck());
         dto.setViewOnly(user.isViewOnly());
         dto.setBuyerPermissions(user.getBuyerPermissions());
+        dto.setBuyerTypePermissions(user.getBuyerTypePermissions());
         dto.setFactoryPermissions(user.getFactoryPermissions());
         dto.setWeighingFactoryPermissions(user.getWeighingFactoryPermissions());
         return dto;

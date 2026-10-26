@@ -28,6 +28,7 @@ public final class AppConstants {
     public static final class Collection {
         public static final String USERS = "users";
         public static final String DEPARTMENTS = "departments";
+        public static final String FACTORIES = "factories";
         public static final String BUYERS = "buyers";
         public static final String AUDIT_LOGS = "audit_logs";
         public static final String ORDERS = "orders";
@@ -36,6 +37,7 @@ public final class AppConstants {
         public static final String CARTON_OPERATIONS = "carton_operations";
         public static final String FACTORY_BARCODES = "factory_barcodes";
         public static final String SCALE_STATIONS = "scale_stations";
+        public static final String SCALE_PLC_DEVICES = "scale_plc_devices";
         public static final String SHIPMENTS = "shipments";
         public static final String PURCHASE_ORDERS = "purchase_orders";
         public static final String CARTONS = "cartons";
@@ -45,8 +47,37 @@ public final class AppConstants {
         public static final String WEIGHING_ORDERS = "weighing_orders";
         public static final String WEIGHING_RESULTS = "weighing_results";
         public static final String SHIPPING_SCHEDULES = "shipping_schedules";
-        public static final String LULULEMON_CARTON_CHECKING = "lululemon_carton_checking_history";
+        public static final String CARTON_CHECKING_HISTORY = "carton_checking_history";
+        public static final String PO_PICK_CLAIMS = "po_pick_claims";
+        public static final String PO_PICK_HISTORY = "po_pick_history";
+        public static final String RFID_SCAN_SESSIONS = "rfid_scan_sessions";
+        public static final String RFID_PDA_CAPTURES = "rfid_pda_captures";
+        public static final String RFID_PDA_DEVICES = "rfid_pda_devices";
         private Collection() { }
+    }
+
+    public static final class Plc {
+        public static final int DEFAULT_PORT = 502;
+        public static final int DEFAULT_UNIT = 1;
+        public static final int DEFAULT_CONNECT_TIMEOUT_MS = 1200;
+        public static final int DEFAULT_READ_TIMEOUT_MS = 1500;
+        public static final double DEFAULT_KG_PER_UNIT = 0.001; // ModbusPal: integer grams -> kg
+        public static final String UINT16 = "UINT16";
+        public static final String INT16 = "INT16";
+        public static final String UINT32 = "UINT32";
+        public static final String INT32 = "INT32";
+        private Plc() { }
+    }
+
+    public static final class OrganizationRealtime {
+        public static final String NATIVE_ENDPOINT = "/ws-native";
+        public static final String NATIVE_SESSION_MARKER = "organization-native-websocket";
+        public static final String FACTORIES_TOPIC = "/topic/organization-factories";
+        public static final String ADMIN_TOPIC = "/topic/organization-admin";
+        public static final String FACTORY = "FACTORY";
+        public static final String DEPARTMENT = "DEPARTMENT";
+        public static final String USER = "USER";
+        private OrganizationRealtime() { }
     }
 
     public static final class Role {
@@ -59,6 +90,8 @@ public final class AppConstants {
         public static final String SALES = "SALES";
         public static final String VIEW_SYSTEM = "VIEW_SYSTEM";
         public static final String ASSIGN_BARCODE = "ASSIGN_BARCODE";
+        public static final String PICK_PO = "PICK_PO";
+        public static final String ASSIGN_WEIGHT = "ASSIGN_WEIGHT";
         public static final String WEIGHT_CHECK = "WEIGHT_CHECK";
         public static final String BARCODE_OPERATOR = "BARCODE_OPERATOR";
         public static final String PRINT_ROOM = "PRINT_ROOM";
@@ -99,7 +132,7 @@ public final class AppConstants {
     }
 
     public static final class Validation {
-        public static final String FACTORY_CODE_REGEX = "(?i)F[1-7]";
+        public static final String FACTORY_CODE_REGEX = "(?i)F[1-9][0-9]*";
         private Validation() { }
     }
 
@@ -204,7 +237,8 @@ public final class AppConstants {
         public static final String PLC = "PLC";
         public static final String SCALE = "SCALE";
         public static final String MANUAL = "MANUAL";
-        public static final java.util.Set<String> ALLOWED = java.util.Set.of(PLC, SCALE, MANUAL);
+        public static final String SIMULATOR = "SIMULATOR";
+        public static final java.util.Set<String> ALLOWED = java.util.Set.of(PLC, SCALE, MANUAL, SIMULATOR);
         private WeightSource() { }
     }
 
@@ -241,6 +275,7 @@ public final class AppConstants {
         public static final String FINISH_CARTON = "LULULEMON_FINISH_CARTON";
         public static final String SHIPPING_IMPORT = "LULULEMON_SHIPPING_IMPORT";
         public static final String SHIPPING_SCHEDULE_CREATE = "LULULEMON_SHIPPING_SCHEDULE_CREATE";
+        public static final String PO_SHIPPING_PLAN_CREATE = "LULULEMON_PO_SHIPPING_PLAN_CREATE";
         public static final String CHECKING_PASS = "LULULEMON_CARTON_QC_PASS";
         public static final String CHECKING_FAIL = "LULULEMON_CARTON_QC_FAIL";
         public static final String SHIPPING_SCHEDULE_REMOVE = "LULULEMON_SHIPPING_SCHEDULE_REMOVE";
@@ -253,10 +288,12 @@ public final class AppConstants {
         public static final String RESET_PO_SKU = "LULULEMON_RESET_PO_SKU";
         public static final String REOPEN_CARTON = "LULULEMON_REOPEN_CARTON";
         public static final String UNASSIGN_SSCC = "LULULEMON_UNASSIGN_SSCC";
+        public static final String UNASSIGN_CARTON_IDENTITY = "LULULEMON_UNASSIGN_CARTON_IDENTITY";
         public static final String WEIGHT_PROFILE_SAVE = "LULULEMON_WEIGHT_PROFILE_SAVE";
         public static final String WEIGHING_ORDER_CREATE = "LULULEMON_WEIGHING_ORDER_CREATE";
         public static final String WEIGHT_CAPTURE = "LULULEMON_WEIGHT_CAPTURE";
         public static final String REWEIGH_OPEN = "LULULEMON_REWEIGH_OPEN";
+        public static final String RECALL_FAILED_CARTON = "LULULEMON_RECALL_FAILED_CARTON";
         public static final String WEIGHT_OVERRIDE = "LULULEMON_WEIGHT_OVERRIDE";
         public static final String WEIGHING_SESSION_START = "LULULEMON_WEIGHING_SESSION_START";
         public static final String WEIGHING_SESSION_STOP = "LULULEMON_WEIGHING_SESSION_STOP";
@@ -278,10 +315,12 @@ public final class AppConstants {
         public static final String USER = "USER";
         public static final String BUYER = "BUYER";
         public static final String DEPARTMENT = "DEPARTMENT";
+        public static final String FACTORY = "FACTORY";
         public static final String ORDER = "ORDER";
         public static final String CARTON_LOADING = "LULULEMON_CARTON_LOADING";
         public static final String WEIGHING = "LULULEMON_WEIGHING";
         public static final String SHIPPING_SCHEDULE = "LULULEMON_SHIPPING_SCHEDULE";
+        public static final String PO_SHIPPING_PLAN = "LULULEMON_PO_SHIPPING_PLAN";
         public static final String PO_HANDOFF = "LULULEMON_PO_HANDOFF";
         public static final String SHIPMENT_CARTON = "SHIPMENT_CARTON";
         public static final String CARTON = "CARTON";

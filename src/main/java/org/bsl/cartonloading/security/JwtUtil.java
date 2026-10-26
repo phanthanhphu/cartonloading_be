@@ -46,11 +46,18 @@ public class JwtUtil {
     }
 
     public String generateToken(
+            String email, String role, long tokenVersion,
+            Collection<String> accessPermissions, Collection<String> buyerPermissions
+    ) { return generateToken(email, role, tokenVersion, accessPermissions, buyerPermissions, "", ""); }
+
+    public String generateToken(
             String email,
             String role,
             long tokenVersion,
             Collection<String> accessPermissions,
-            Collection<String> buyerPermissions
+            Collection<String> buyerPermissions,
+            String selectedBuyer,
+            String selectedType
     ) {
         String normalizedRole = User.normalizeRole(role);
         List<String> normalizedPermissions = User.normalizeAccessPermissions(accessPermissions, AppConstants.Role.ADMIN.equals(normalizedRole));
@@ -65,6 +72,8 @@ public class JwtUtil {
                 .claim("tokenVersion", tokenVersion)
                 .claim("accessPermissions", normalizedPermissions)
                 .claim("buyerPermissions", normalizedBuyers)
+                .claim("selectedBuyer", org.bsl.cartonloading.model.BuyerAccess.normalize(selectedBuyer))
+                .claim("selectedType", org.bsl.cartonloading.model.SystemType.normalize(selectedType))
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
                 .signWith(key, SignatureAlgorithm.HS256)
@@ -149,6 +158,15 @@ public class JwtUtil {
         } catch (JwtException | IllegalArgumentException exception) {
             return List.of();
         }
+    }
+
+    public String getSelectedBuyer(String token) {
+        try { return org.bsl.cartonloading.model.BuyerAccess.normalize(parse(token).getBody().get("selectedBuyer", String.class)); }
+        catch (JwtException | IllegalArgumentException exception) { return ""; }
+    }
+    public String getSelectedType(String token) {
+        try { return org.bsl.cartonloading.model.SystemType.normalize(parse(token).getBody().get("selectedType", String.class)); }
+        catch (JwtException | IllegalArgumentException exception) { return ""; }
     }
 
     public boolean isTokenBlacklisted(String token) { return false; }

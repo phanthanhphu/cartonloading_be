@@ -7,6 +7,8 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidPdaDevice;
+import org.bsl.cartonloading.model.User;
+import org.bsl.cartonloading.repository.UserRepository;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidPdaCapture;
 import org.bsl.cartonloading.buyers.lululemon.repository.RfidPdaCaptureRepository;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -21,7 +23,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
+import org.bsl.cartonloading.service.FactoryCatalogService;
 import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.factory.FactoryCodes;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -59,6 +63,8 @@ public class RfidPdaDeviceService {
     private final RfidPdaCaptureRepository captureRepository;
     private final MongoTemplate mongoTemplate;
     private final AuditLogService auditLogService;
+    private final FactoryCatalogService factories;
+    private final UserRepository users;
 
     @PostConstruct
     public void createCaptureUniqueIndex() {
@@ -86,14 +92,16 @@ public class RfidPdaDeviceService {
 
     public RfidPdaDeviceService(RfidPdaDeviceRepository configs, LululemonRfidService cartons,
                                 BuyerFactoryAccessService factoryAccess, RfidPdaCaptureRepository captureRepository,
-                                MongoTemplate mongoTemplate, AuditLogService auditLogService,
-                                @Value("${lululemon.rfid.adb-path:adb}") String adb) {
+                                MongoTemplate mongoTemplate, AuditLogService auditLogService, FactoryCatalogService factories,
+                                @Value("${lululemon.rfid.adb-path:adb}") String adb, UserRepository users) {
         this.configs = configs;
         this.cartons = cartons;
         this.factoryAccess = factoryAccess;
         this.captureRepository = captureRepository;
         this.mongoTemplate = mongoTemplate;
         this.auditLogService = auditLogService;
+        this.factories = factories;
+        this.users = users;
         this.adb = adb;
     }
 
@@ -101,11 +109,11 @@ public class RfidPdaDeviceService {
                          boolean online, String state, Integer startX, Integer startY,
                          Integer stopX, Integer stopY, boolean capturing, String capturePhase,
                          String captureSessionId, String factoryCode, boolean defaultReader,
-                         List<String> factoryCodes, List<String> defaultFactoryCodes, boolean registered) { }
+                         List<String> factoryCodes, List<String> defaultFactoryCodes, boolean registered, List<String> assignedUserIds) { }
     public record DeviceSettings(String label, String stationCode, Integer startX, Integer startY,
                                  Integer stopX, Integer stopY) { }
     public record GlobalDeviceSettings(String label, Integer startX, Integer startY,
-                                       Integer stopX, Integer stopY, List<String> factoryCodes) { }
+                                       Integer stopX, Integer stopY, List<String> factoryCodes, List<String> assignedUserIds) { }
     public record CaptureResult(String serial, String sessionId, String status, String message) { }
     /** Diagnostics for the exact exports that contributed to a preview; timestamps are PDA epoch seconds. */
     public record ExportFileSummary(String filename, long modifiedAtEpochSecond,
@@ -127,7 +135,7 @@ public class RfidPdaDeviceService {
         List<Device> result = new ArrayList<>();
         for (RfidPdaDevice config : configs.findAll()) {
             Set<String> assigned = assignedFactories(config);
-            if (assigned.contains(factory))
+            if (assigned.contains(factory) && canUseReader(config))
                 result.add(asDevice(config, online.get(config.getSerial()), factory));
         }
         result.sort(Comparator.comparing(Device::defaultReader).reversed()
@@ -149,7 +157,7 @@ public class RfidPdaDeviceService {
                 result.add(new Device(entry.getKey(), entry.getKey(), null, false,
                         "device".equals(entry.getValue()), entry.getValue(), null, null,
                         null, null, captureRepository.existsById(entry.getKey()), "IDLE", null,
-                        null, false, List.of(), List.of(), false));
+                        null, false, List.of(), List.of(), false, List.of()));
             }
         }
         result.sort(Comparator.comparing(Device::label, Comparator.nullsLast(String::compareToIgnoreCase))
@@ -179,7 +187,11 @@ public class RfidPdaDeviceService {
         Set<String> previous = assignedFactories(config);
         LinkedHashSet<String> wanted = new LinkedHashSet<>();
         if (settings.factoryCodes() != null) {
-            for (String value : settings.factoryCodes()) wanted.add(normalizeFactory(value));
+            for (String value : settings.factoryCodes()) {
+                String code = normalizeFactory(value);
+                factories.requireActive(AppConstants.Buyer.LULULEMON, code);
+                wanted.add(code);
+            }
         }
         // Users cannot add/remove assignments to factories where they have no weighing rights.
         for (String code : previous) if (!wanted.contains(code)) factoryAccess.assertWeighingFactoryAccess(code);
@@ -188,6 +200,18 @@ public class RfidPdaDeviceService {
         config.setLabel(label.isBlank() ? serial : label.substring(0, Math.min(label.length(), 80)));
         config.setStartX(settings.startX()); config.setStartY(settings.startY());
         config.setStopX(settings.stopX()); config.setStopY(settings.stopY());
+        if (settings.assignedUserIds() != null) {
+            Set<String> personIds = new LinkedHashSet<>();
+            for (String id : settings.assignedUserIds()) {
+                User user = users.findById(id).orElseThrow(() -> new IllegalArgumentException("RFID User not found"));
+                if (!user.isEnabled() || !user.canWeightCheck()
+                        || !user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                        || wanted.stream().noneMatch(user::canAccessWeighingFactory))
+                    throw new IllegalArgumentException("RFID User must have Weight Check in an assigned Factory");
+                personIds.add(id);
+            }
+            config.setAssignedUserIds(new ArrayList<>(personIds));
+        }
         Set<String> defaults = defaultFactories(config);
         defaults.retainAll(wanted);
         updateAssignments(config, wanted, defaults);
@@ -206,6 +230,7 @@ public class RfidPdaDeviceService {
     public synchronized Device setDefault(String factoryCode, String serial) {
         validSerial(serial);
         String factory = factory(factoryCode);
+        factories.requireActive(AppConstants.Buyer.LULULEMON, factory);
         RfidPdaDevice config = configs.findById(serial)
                 .orElseThrow(() -> new IllegalArgumentException("Reader not configured."));
         if (!assignedFactories(config).contains(factory))
@@ -261,8 +286,8 @@ public class RfidPdaDeviceService {
     private Set<String> assignedFactories(RfidPdaDevice config) {
         Set<String> result = new LinkedHashSet<>();
         if (config.getFactoryCodes() != null) for (String code : config.getFactoryCodes())
-            if (code != null && code.matches("F[1-7]")) result.add(code);
-        if (config.getFactoryCode() != null && config.getFactoryCode().toUpperCase(java.util.Locale.ROOT).matches("F[1-7]"))
+            if (code != null && FactoryCodes.isValid(code)) result.add(code);
+        if (config.getFactoryCode() != null && FactoryCodes.isValid(config.getFactoryCode()))
             result.add(config.getFactoryCode().toUpperCase(java.util.Locale.ROOT));
         return result;
     }
@@ -270,9 +295,9 @@ public class RfidPdaDeviceService {
     private Set<String> defaultFactories(RfidPdaDevice config) {
         Set<String> result = new LinkedHashSet<>();
         if (config.getDefaultFactoryCodes() != null) for (String code : config.getDefaultFactoryCodes())
-            if (code != null && code.matches("F[1-7]")) result.add(code);
+            if (code != null && FactoryCodes.isValid(code)) result.add(code);
         if (config.isDefaultReader() && config.getFactoryCode() != null
-                && config.getFactoryCode().toUpperCase(java.util.Locale.ROOT).matches("F[1-7]"))
+                && FactoryCodes.isValid(config.getFactoryCode()))
             result.add(config.getFactoryCode().toUpperCase(java.util.Locale.ROOT));
         result.retainAll(assignedFactories(config));
         return result;
@@ -280,7 +305,7 @@ public class RfidPdaDeviceService {
 
     private String normalizeFactory(String raw) {
         String code = raw == null ? "" : raw.trim().toUpperCase(java.util.Locale.ROOT);
-        if (!code.matches("F[1-7]")) throw new IllegalArgumentException("Factory must be F1 to F7.");
+        if (!FactoryCodes.isValid(code)) throw new IllegalArgumentException("Invalid Factory code: " + code);
         return code;
     }
 
@@ -325,13 +350,27 @@ public class RfidPdaDeviceService {
                 current != null, current == null ? "IDLE" : current.stopped() ? "STOPPED" : "STARTED",
                 current == null ? null : current.sessionId(), viewFactory,
                 viewFactory != null && defaults.contains(viewFactory),
-                new ArrayList<>(assigned), new ArrayList<>(defaults), true);
+                new ArrayList<>(assigned), new ArrayList<>(defaults), true,
+                config.getAssignedUserIds() == null ? List.of() : List.copyOf(config.getAssignedUserIds()));
+    }
+
+    private boolean canUseReader(RfidPdaDevice device) {
+        List<String> ids = device.getAssignedUserIds();
+        if (ids == null || ids.isEmpty() || RequestActor.isAdmin()) return true;
+        return users.findByEmail(RequestActor.current())
+                .filter(User::isEnabled).map(user -> ids.contains(user.getId())).orElse(false);
+    }
+
+    private void assertReaderUser(RfidPdaDevice device) {
+        if (!canUseReader(device))
+            throw new org.springframework.security.access.AccessDeniedException("RFID Reader not assigned to your User");
     }
 
     public synchronized CaptureResult start(String serial, String stationCode, String orderId, String poId,
                                              String sscc, String sessionId) {
         assertCartonScanning(orderId, poId, sscc, sessionId, stationCode);
         RfidPdaDevice config = requireConfigured(serial, orderId, poId, sscc);
+        assertReaderUser(config);
         requireOnline(serial);
         if (captureRepository.existsById(serial)) throw new IllegalArgumentException("Reader already reserved for a carton. Stop and import first.");
         if (captureRepository.existsBySessionId(sessionId))
@@ -370,6 +409,7 @@ public class RfidPdaDeviceService {
         Capture capture = requireCapture(serial, stationCode, orderId, poId, sscc, sessionId);
         if (capture.stopped()) return new CaptureResult(serial, sessionId, "STOP_TAP_SENT", "Already sent STOP.");
         RfidPdaDevice config = requireConfigured(serial, orderId, poId, sscc);
+        assertReaderUser(config);
         requireOnline(serial);
         tap(serial, config.getStopX(), config.getStopY());
         captureRepository.save(encodeCapture(serial, new Capture(capture.station(), capture.order(), capture.po(), capture.sscc(),
@@ -594,7 +634,7 @@ public class RfidPdaDeviceService {
     }
     private String factory(String value) {
         String code = value == null ? "" : value.trim().toUpperCase(java.util.Locale.ROOT);
-        if (!code.matches("F[1-7]")) throw new IllegalArgumentException("Factory must be F1 to F7.");
+        if (!FactoryCodes.isValid(code)) throw new IllegalArgumentException("Invalid Factory code: " + code);
         factoryAccess.assertWeighingFactoryAccess(code);
         return code;
     }

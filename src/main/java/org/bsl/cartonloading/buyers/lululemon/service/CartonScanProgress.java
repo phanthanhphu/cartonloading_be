@@ -18,7 +18,13 @@ public record CartonScanProgress(
         int identifiedCartons,
         int identifiedFullCartons,
         int identifiedRemainderQty,
-        int identifiedRemainderCartons
+        int identifiedRemainderCartons,
+        // Completed means final inspection PASS: both RFID and Weight must PASS.
+        int completedQty,
+        int completedCartons,
+        int completedFullCartons,
+        int completedRemainderQty,
+        int completedRemainderCartons
 ) {
     public static CartonScanProgress from(PurchaseOrder po, List<Carton> cartons) {
         Set<Integer> oddCartonNumbers = oddCartonNumbers(po);
@@ -32,6 +38,11 @@ public record CartonScanProgress(
         int identifiedFullCartons = 0;
         int identifiedRemainderQty = 0;
         int identifiedRemainderCartons = 0;
+        int completedQty = 0;
+        int completedCartons = 0;
+        int completedFullCartons = 0;
+        int completedRemainderQty = 0;
+        int completedRemainderCartons = 0;
         for (Carton carton : cartons) {
             int planned = Math.max(0, Optional.ofNullable(carton.getPlannedQty()).orElse(0));
             int scanned = Math.max(0, Math.min(planned, Optional.ofNullable(carton.getScannedQty()).orElse(0)));
@@ -52,6 +63,21 @@ public record CartonScanProgress(
                     identifiedRemainderCartons++;
                 } else identifiedFullCartons++;
             }
+            // Persisted current results, not an old PASS event or an SSCC/label confirmation.
+            // Recalling either inspection makes the carton pending until BOTH PASS again.
+            boolean completed = planned > 0
+                    && "PASS".equals(carton.getRfidStatus())
+                    && AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus());
+            if (completed) {
+                completedQty += planned;
+                completedCartons++;
+                if (oddCarton) {
+                    completedRemainderQty += planned;
+                    completedRemainderCartons++;
+                } else {
+                    completedFullCartons++;
+                }
+            }
             if (oddCarton) scannedRemainderQty += scanned;
             if (planned > 0 && scanned == planned) {
                 scannedCartons++;
@@ -62,7 +88,9 @@ public record CartonScanProgress(
         return new CartonScanProgress(scannedQty, scannedCartons, scannedFullCartons,
                 scannedRemainderQty, scannedRemainderCartons,
                 identifiedQty, identifiedCartons, identifiedFullCartons,
-                identifiedRemainderQty, identifiedRemainderCartons);
+                identifiedRemainderQty, identifiedRemainderCartons,
+                completedQty, completedCartons, completedFullCartons,
+                completedRemainderQty, completedRemainderCartons);
     }
 
     /** Match odd Cartons by their exact position in the saved ALL_BP carton plan.

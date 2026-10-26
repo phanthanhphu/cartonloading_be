@@ -49,7 +49,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/login", "/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/buyers/login-options").permitAll()
                         .requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**", "/css/**", "/js/**", "/images/**").permitAll()
-                        .requestMatchers("/actuator/health", "/actuator/health/**", "/health", "/info", "/ws/**").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/health/**", "/health", "/info", "/ws/**", "/ws-native").permitAll()
                         // API docs and remaining Actuator endpoints require authentication by default.
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html",
                                 "/swagger-resources/**", "/webjars/**").authenticated()

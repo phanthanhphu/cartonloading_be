@@ -3,6 +3,7 @@ package org.bsl.cartonloading.model;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.factory.FactoryCodes;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -32,10 +33,44 @@ public class User {
 
     /** Buyer workspaces assigned to this account. ADMIN always receives all buyers. */
     private List<String> buyerPermissions = new ArrayList<>();
+    /** Null on legacy users only; explicit [] denies all Type access. */
+    private List<BuyerTypePermission> buyerTypePermissions;
+    public List<BuyerTypePermission> getBuyerTypePermissions() {
+        if (buyerTypePermissions == null) {
+            return getBuyerPermissions().stream()
+                    .filter(b -> !SystemType.legacyBuyerTypes(b).isEmpty())
+                    .map(b -> new BuyerTypePermission(b, SystemType.legacyBuyerTypes(b))).toList();
+        }
+        return List.copyOf(buyerTypePermissions);
+    }
+    public void setBuyerTypePermissions(List<BuyerTypePermission> grants) {
+        if (grants == null) { buyerTypePermissions = null; return; }
+        java.util.Map<String, java.util.LinkedHashSet<String>> merged = new java.util.LinkedHashMap<>();
+        for (BuyerTypePermission grant : grants) {
+            if (grant == null) continue;
+            String buyer = BuyerAccess.normalize(grant.buyerCode());
+            if (buyer.isEmpty()) throw new IllegalArgumentException("Invalid Buyer in Type permissions");
+            if (grant.types() != null && grant.types().stream().anyMatch(v -> SystemType.normalize(v).isEmpty()))
+                throw new IllegalArgumentException("Invalid Type permission for " + buyer);
+            merged.computeIfAbsent(buyer, ignored -> new java.util.LinkedHashSet<>()).addAll(SystemType.normalizeAll(grant.types()));
+        }
+        buyerTypePermissions = merged.entrySet().stream()
+                .map(e -> new BuyerTypePermission(e.getKey(), List.copyOf(e.getValue())))
+                .toList();
+    }
+    public boolean canAccessBuyerType(String buyer, String type) {
+        String code = BuyerAccess.normalize(buyer);
+        String normalizedType = SystemType.normalize(type);
+        return !code.isEmpty() && !normalizedType.isEmpty() && canAccessBuyer(code)
+                && (isAdminRole() || getBuyerTypePermissions().stream()
+                       .anyMatch(grant -> code.equals(BuyerAccess.normalize(grant.buyerCode()))
+                               && grant.types().contains(normalizedType)));
+    }
+
 
     /**
      * Factory scope used by Buyer workflows such as LULULEMON.
-     * Values are normalized codes such as F1, F2, F3. Sales/Admin may operate all factories.
+     * Values are normalized codes such as F1, F8, F25. Only ADMIN bypasses the assigned Factory scope.
      */
     private List<String> factoryPermissions = new ArrayList<>();
 
@@ -64,7 +99,7 @@ public class User {
 
     public static List<String> normalizeAccessPermissions(Collection<String> values, boolean admin) {
         if (admin) {
-            return List.of(AppConstants.Permission.SALES, AppConstants.Permission.ASSIGN_BARCODE, AppConstants.Permission.WEIGHT_CHECK, AppConstants.Permission.BARCODE_OPERATOR, AppConstants.Permission.PRINT_ROOM);
+            return List.of(AppConstants.Permission.SALES, AppConstants.Permission.ASSIGN_BARCODE, AppConstants.Permission.PICK_PO, AppConstants.Permission.ASSIGN_WEIGHT, AppConstants.Permission.WEIGHT_CHECK, AppConstants.Permission.BARCODE_OPERATOR, AppConstants.Permission.PRINT_ROOM);
         }
 
         Set<String> normalized = new LinkedHashSet<>();
@@ -73,7 +108,7 @@ public class User {
                 if (value == null) continue;
                 String permission = value.trim().toUpperCase(Locale.ROOT);
                 if (AppConstants.Permission.SALES.equals(permission) || AppConstants.Permission.VIEW_SYSTEM.equals(permission)
-                        || AppConstants.Permission.ASSIGN_BARCODE.equals(permission) || AppConstants.Permission.WEIGHT_CHECK.equals(permission)
+                        || AppConstants.Permission.ASSIGN_BARCODE.equals(permission) || AppConstants.Permission.PICK_PO.equals(permission) || AppConstants.Permission.ASSIGN_WEIGHT.equals(permission) || AppConstants.Permission.WEIGHT_CHECK.equals(permission)
                         || AppConstants.Permission.BARCODE_OPERATOR.equals(permission) || AppConstants.Permission.PRINT_ROOM.equals(permission)) {
                     normalized.add(permission);
                 }
@@ -102,12 +137,21 @@ public class User {
         return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.SALES);
     }
 
+    /** Existing Packing accounts keep PO Picking; PICK_PO can be granted independently. */
+    public boolean canPickPo() {
+        return isAdminRole() || canAssignBarcode() || getAccessPermissions().contains(AppConstants.Permission.PICK_PO);
+    }
+
     public boolean canAssignBarcode() {
         return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.ASSIGN_BARCODE);
     }
 
     public boolean canManageBarcodes() {
         return canManageSales() || getAccessPermissions().contains(AppConstants.Permission.BARCODE_OPERATOR);
+    }
+
+    public boolean canAssignWeight() {
+        return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.ASSIGN_WEIGHT);
     }
 
     public boolean canWeightCheck() {
@@ -166,13 +210,13 @@ public class User {
         if (values == null) return;
         for (String value : values) {
             String code = normalizeFactoryCode(value);
-            if (!code.matches("F[1-7]")) throw new IllegalArgumentException("Weighing Factory must be F1 to F7");
+            if (!FactoryCodes.isValid(code)) throw new IllegalArgumentException("Invalid Weighing Factory code: " + code);
             if (!weighingFactoryPermissions.contains(code)) weighingFactoryPermissions.add(code);
         }
     }
 
     public boolean canAccessWeighingFactory(String factoryCode) {
-        if (isAdminRole() || canManageSales()) return true;
+        if (isAdminRole()) return true;
         // Preserve existing Packing/read-only visibility; actual weighing mutations
         // still require WEIGHT_CHECK at the controller.
         if (!canWeightCheck()) return canAccessFactory(factoryCode);
@@ -181,11 +225,11 @@ public class User {
     }
 
     public boolean canAccessFactory(String factoryCode) {
-        if (isAdminRole() || canManageSales() || isViewOnly()) return true;
+        if (isAdminRole()) return true;
         String normalized = normalizeFactoryCode(factoryCode);
         if (normalized.isEmpty()) return false;
         List<String> allowed = getFactoryPermissions();
-        return allowed.contains("*") || allowed.contains(normalized);
+        return allowed.contains(normalized);
     }
 
     public static String normalizeFactoryCode(String value) {

@@ -15,5 +15,10 @@ public record PoSummary(
         int identifiedCartons,
         int identifiedFullCartons,
         int identifiedRemainderQty,
-        int identifiedRemainderCartons
+        int identifiedRemainderCartons,
+        int completedQty,
+        int completedCartons,
+        int completedFullCartons,
+        int completedRemainderQty,
+        int completedRemainderCartons
 ) { }

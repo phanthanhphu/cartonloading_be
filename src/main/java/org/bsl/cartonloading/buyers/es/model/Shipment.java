@@ -14,6 +14,8 @@ import java.util.List;
 public class Shipment {
     @Id private String id;
     private String buyerCode;
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey;
     private String orderId;
     private String shipmentNo;
     private String destination;

@@ -37,9 +37,10 @@ public class CartonDashboardService {
 
     public DashboardSummary summary() {
         User user = currentUser();
-        List<String> buyerCodes = user.isAdminRole()
-                ? buyers.findByActiveTrueOrderBySequenceAscBuyerNameAsc().stream().map(b -> b.getBuyerKey()).toList()
-                : user.getBuyerPermissions();
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getDetails() instanceof org.bsl.cartonloading.security.WorkspaceSession session))
+            throw new org.springframework.security.access.AccessDeniedException("Select a Buyer and Type at login");
+        List<String> buyerCodes = List.of(session.buyer());
         List<DashboardSummary.BuyerSummary> rows = new ArrayList<>();
         long orders=0,pos=0,cartons=0,items=0,assigned=0,completed=0,warnings=0,shipments=0;
         for (String buyer : buyerCodes) {

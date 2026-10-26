@@ -7,6 +7,7 @@ import org.bsl.cartonloading.buyers.lululemon.model.PoPickClaim;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession;
 import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.service.FactoryCatalogService;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -22,8 +23,9 @@ public class LululemonOperationsDashboardService {
     private static final String BUYER = AppConstants.Buyer.LULULEMON;
     private final MongoTemplate mongo;
     private final BuyerFactoryAccessService access;
-    public LululemonOperationsDashboardService(MongoTemplate mongo, BuyerFactoryAccessService access) {
-        this.mongo = mongo; this.access = access;
+    private final FactoryCatalogService factories;
+    public LululemonOperationsDashboardService(MongoTemplate mongo, BuyerFactoryAccessService access, FactoryCatalogService factories) {
+        this.mongo = mongo; this.access = access; this.factories = factories;
     }
 
     public record Totals(int orders, int pos, long plannedCartons, int createdCartons,
@@ -141,7 +143,7 @@ public class LululemonOperationsDashboardService {
                     rows.stream().mapToInt(PoRow::finalPass).sum()));
         }
         List<FactoryRow> factoryRows = new ArrayList<>();
-        for (String code : List.of("F1", "F2", "F3", "F4", "F5", "F6", "F7")) {
+        for (String code : factories.list(AppConstants.Buyer.LULULEMON, false).stream().map(org.bsl.cartonloading.model.Factory::getCode).toList()) {
             if (!unrestricted && !access.canAccessAssignedFactory(code)) continue;
             List<PoRow> rows = poRows.stream().filter(p -> code.equals(p.factoryCode()) && p.picked()).toList();
             List<String> numbers = rows.stream().map(PoRow::poNumber).distinct().sorted().toList();

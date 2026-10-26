@@ -1,6 +1,9 @@
 package org.bsl.cartonloading.config;
 
+import com.mongodb.MongoException;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.model.Collation;
+import com.mongodb.client.model.CollationStrength;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import jakarta.annotation.PostConstruct;
@@ -12,9 +15,9 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 /**
  * Creates indexes for the current multi-buyer schema.
  *
- * This initializer is create-only except for one targeted LULULEMON migration:
- * the legacy unique Purchase Order index (buyer + order + PO number) is removed
- * because one PO number may legitimately have multiple ALL_BP business records.
+ * This initializer is create-only except for targeted LULULEMON migrations:
+ * prior PO-level and two-column unique indexes are superseded by the four-field
+ * ALL_BP identity: Master PO + PO + Packing Plan + SO (PTS) within an Order.
  */
 @Configuration
 public class MongoIndexConfig {
@@ -39,6 +42,9 @@ public class MongoIndexConfig {
     }
 
     private void createCoreIndexes() {
+        MongoCollection<Document> factories = mongoTemplate.getCollection(AppConstants.Collection.FACTORIES);
+        factories.createIndex(Indexes.compoundIndex(Indexes.ascending("buyer_key"), Indexes.ascending("code")),
+                new IndexOptions().name("factory_buyer_code_unique").unique(true));
         MongoCollection<Document> buyers = mongoTemplate.getCollection(AppConstants.Collection.BUYERS);
         buyers.createIndex(Indexes.ascending("buyerKey"), new IndexOptions().name("uq_buyer_key").unique(true));
         buyers.createIndex(Indexes.ascending("slug"), new IndexOptions().name("uq_buyer_slug").unique(true));
@@ -196,8 +202,8 @@ public class MongoIndexConfig {
     private void createPurchaseOrderIndexes() {
         MongoCollection<Document> purchaseOrders = mongoTemplate.getCollection(AppConstants.Collection.PURCHASE_ORDERS);
 
-        // LULULEMON ALL_BP identity is not PO-only. Remove the old unique index so
-        // rows with the same PO but a different business key can be stored separately.
+        // PO is unique together with Master PO, not on its own. The old PO-only
+        // index would incorrectly block different Master PO + PO combinations.
         String legacyPoUniqueIndex = "uq_purchase_order_buyer_order_number";
         if (hasIndex(purchaseOrders, legacyPoUniqueIndex)) {
             purchaseOrders.dropIndex(legacyPoUniqueIndex);
@@ -223,6 +229,39 @@ public class MongoIndexConfig {
                                 .append("orderId", new Document("$type", "string"))
                                 .append("poNumber", new Document("$type", "string")))
         );
+        // Enforce the current four-column LULULEMON identity at database level.
+        // IMPORTANT: create the replacement BEFORE removing the old 2-key index
+        // so failed migrations never silently remove the existing constraint.
+        // Do not mutate historical Carton / Shipping / Weight / RFID data.
+        String oldPairIndex = "uq_lululemon_order_master_po_po";
+        String fourKeyIndex = "uq_lululemon_order_master_po_po_plan_so_pts";
+        try {
+            purchaseOrders.createIndex(
+                    Indexes.compoundIndex(
+                            Indexes.ascending("buyerCode"), Indexes.ascending("orderId"),
+                            Indexes.ascending("masterPo"), Indexes.ascending("poNumber"),
+                            Indexes.ascending("packingPlan"), Indexes.ascending("salesOrderPts")),
+                    new IndexOptions().name(fourKeyIndex).unique(true)
+                            .collation(Collation.builder().locale("en")
+                                    .collationStrength(CollationStrength.SECONDARY).build())
+                            .partialFilterExpression(new Document("buyerCode", AppConstants.Buyer.LULULEMON)
+                                    .append("orderId", new Document("$type", "string"))
+                                    .append("masterPo", new Document("$type", "string"))
+                                    .append("poNumber", new Document("$type", "string")))
+            );
+            if (hasIndex(purchaseOrders, oldPairIndex)) {
+                purchaseOrders.dropIndex(oldPairIndex);
+            }
+        } catch (MongoException ex) {
+            if (ex.getCode() != 11000) throw ex;
+            System.err.println("WARNING: Existing LULULEMON POs violate the four-column unique key "
+                    + "(Master PO, PO, Packing Plan, SO (PTS)). "
+                    + "Index " + fourKeyIndex + " could not be created; review historical duplicates "
+                    + "without deleting operational records. The former two-key index, if present, "
+                    + "was preserved. Application upload validation remains active. "
+                    + ex.getMessage());
+        }
+
         purchaseOrders.createIndex(
                 Indexes.compoundIndex(Indexes.ascending("buyerCode"), Indexes.ascending("orderId"), Indexes.ascending("factoryCode"), Indexes.ascending("status")),
                 new IndexOptions().name("idx_purchase_order_factory_status")

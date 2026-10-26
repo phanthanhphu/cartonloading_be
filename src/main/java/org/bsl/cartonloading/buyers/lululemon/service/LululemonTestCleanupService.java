@@ -55,10 +55,23 @@ public class LululemonTestCleanupService {
         }
     }
 
+    /** Count exactly what will be removed. Read-only; independent of order name/user input. */
+    public Map<String, Object> preview(String buyer, String orderId) {
+        assertAvailable(buyer, orderId);
+        PackingOrder entity = template.findById(orderId, PackingOrder.class);
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (Target target : targets(orderId)) {
+            counts.put(target.label(), template.count(target.query(), target.collection()));
+        }
+        boolean activeCapture = template.exists(captureQuery(orderId).addCriteria(Criteria.where("stopped").is(false)), RfidPdaCapture.class);
+        return Map.of("orderId", orderId, "orderName", entity.getOrderName(),
+                "counts", counts, "activeCapture", activeCapture);
+    }
+
     /**
-     * Removes only documents scoped to this single Order and buyer. Audit logs are retained.
-     * Multi-collection Mongo deletes are not transactional without MongoDB replica set support:
-     * run only on a disposable database after taking a backup.
+     * TEST-ONLY destructive cleanup by OrderId and buyer (never by PO number or SSCC alone).
+     * No Mongo multi-collection transaction is assumed: if a delete fails, repeat this
+     * idempotent operation after fixing the error; the Order is deleted last.
      */
     public synchronized Map<String, Object> purge(String buyer, String orderId, String confirmation) {
         assertAvailable(buyer, orderId);
@@ -67,51 +80,72 @@ public class LululemonTestCleanupService {
         if (!required.equals(confirmation)) {
             throw new IllegalArgumentException("Type '" + required + "' to confirm deletion of this Order and all related data.");
         }
+        // Never remove active PDA reservations while the physical device may still be scanning.
+        if (template.exists(captureQuery(orderId).addCriteria(Criteria.where("stopped").is(false)), RfidPdaCapture.class)) {
+            throw new IllegalStateException("Stop active RFID PDA capture(s) before deleting this Order.");
+        }
         audit.log(RequestActor.current(), "TEST_PURGE_STARTED", "LULULEMON_ORDER", orderId,
                 "Test-only hard purge requested for Order " + entity.getOrderName(), null, null);
         Map<String, Long> counts = new LinkedHashMap<>();
-        // Delete dependent records first. Only the selected Order is touched.
-        remove(counts, "RFID sessions", orderId, RfidScanSession.class);
-        remove(counts, "Checking history", orderId, CartonCheckingRecord.class);
-        // Preserve TEST purge for legacy documents without keeping the retired Print Request module.
-        // Checking existence avoids creating print_handoffs in a fresh MongoDB database.
-        removeLegacyPrintHandoffs(counts, orderId);
-        remove(counts, "Weight results", orderId, WeighingResult.class);
-        remove(counts, "Weighing assignments", orderId, WeighingOrder.class);
-        remove(counts, "Weight profiles", orderId, WeightProfile.class);
-        remove(counts, "Shipping schedules", orderId, ShippingSchedule.class);
-        remove(counts, "Scan history", orderId, ScanEvent.class);
-        remove(counts, "Carton items", orderId, CartonItem.class);
-        remove(counts, "Cartons", orderId, Carton.class);
-        remove(counts, "Purchase Orders", orderId, PurchaseOrder.class);
-        remove(counts, "Shipments", orderId, Shipment.class);
-        remove(counts, "Packing list lines", orderId, PackingListLine.class);
-        remove(counts, "Packing allocation lines", orderId, PackingAllocationLine.class);
-        remove(counts, "Carton operations", orderId, CartonScanTransaction.class);
-        remove(counts, "Order", orderId, PackingOrder.class);
+        for (Target target : targets(orderId)) {
+            if (template.collectionExists(target.collection())) {
+                counts.put(target.label(), template.remove(target.query(), target.collection()).getDeletedCount());
+            } else {
+                counts.put(target.label(), 0L);
+            }
+        }
+        // Parent Order last, so a partial error retains the Order for an idempotent retry.
+        Query orderQuery = Query.query(Criteria.where("_id").is(orderId)
+                .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
+        counts.put("Order", template.remove(orderQuery, PackingOrder.class).getDeletedCount());
         audit.log(RequestActor.current(), "TEST_PURGE_FINISHED", "LULULEMON_ORDER", orderId,
                 "Test-only cleanup of Order " + entity.getOrderName() + ": " + counts, null, null);
         return Map.of("orderId", orderId, "orderName", entity.getOrderName(), "deleted", counts);
     }
 
-    private void removeLegacyPrintHandoffs(Map<String, Long> counts, String orderId) {
-        final String legacyCollection = "print_handoffs";
-        if (!template.collectionExists(legacyCollection)) {
-            counts.put("Legacy Print handoffs", 0L);
-            return;
-        }
-        Query query = Query.query(Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
-                .and("orderId").is(orderId));
-        counts.put("Legacy Print handoffs", template.remove(query, legacyCollection).getDeletedCount());
+    private record Target(String label, String collection, Query query) { }
+
+    private java.util.List<Target> targets(String orderId) {
+        java.util.List<Target> targets = new java.util.ArrayList<>();
+        add(targets, "RFID sessions", RfidScanSession.class, ownerQuery(orderId));
+        add(targets, "PDA captures", RfidPdaCapture.class, captureQuery(orderId));
+        add(targets, "PO Pick claims", PoPickClaim.class, ownerQuery(orderId));
+        add(targets, "PO Pick history", PoPickEvent.class, buyerKeyQuery(orderId));
+        add(targets, "Checking history", CartonCheckingRecord.class, ownerQuery(orderId));
+        // Retired print requests were stored in a buyer+Order-scoped collection.
+        targets.add(new Target("Legacy Print handoffs", "print_handoffs", ownerQuery(orderId)));
+        add(targets, "Weight results", WeighingResult.class, ownerQuery(orderId));
+        add(targets, "Weighing assignments", WeighingOrder.class, ownerQuery(orderId));
+        add(targets, "Weight profiles", WeightProfile.class, ownerQuery(orderId));
+        add(targets, "Shipping schedules", ShippingSchedule.class, ownerQuery(orderId));
+        add(targets, "Scan history", ScanEvent.class, ownerQuery(orderId));
+        add(targets, "Carton items", CartonItem.class, ownerQuery(orderId));
+        add(targets, "Cartons", Carton.class, ownerQuery(orderId));
+        add(targets, "Purchase Orders", PurchaseOrder.class, ownerQuery(orderId));
+        add(targets, "Shipments", Shipment.class, ownerQuery(orderId));
+        add(targets, "Packing list lines", PackingListLine.class, ownerQuery(orderId));
+        add(targets, "Packing allocation lines", PackingAllocationLine.class, ownerQuery(orderId));
+        add(targets, "Carton operations", CartonScanTransaction.class, ownerQuery(orderId));
+        return targets;
     }
 
-    private void remove(Map<String, Long> counts, String label, String orderId, Class<?> type) {
-        Query query = Query.query(Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
+    private void add(java.util.List<Target> targets, String label, Class<?> type, Query query) {
+        targets.add(new Target(label, template.getCollectionName(type), query));
+    }
+
+    private Query ownerQuery(String orderId) {
+        // buyerCode remains supported for legacy documents saved before buyer_key existed.
+        return Query.query(Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
                 .and("orderId").is(orderId));
-        if (type == PackingOrder.class) {
-            query = Query.query(Criteria.where("_id").is(orderId)
-                    .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
-        }
-        counts.put(label, template.remove(query, type).getDeletedCount());
+    }
+
+    private Query buyerKeyQuery(String orderId) {
+        return Query.query(Criteria.where("buyer_key").is(AppConstants.Buyer.LULULEMON)
+                .and("orderId").is(orderId));
+    }
+
+    private Query captureQuery(String orderId) {
+        return Query.query(Criteria.where("buyer_key").is(AppConstants.Buyer.LULULEMON)
+                .and("order").is(orderId));
     }
 }

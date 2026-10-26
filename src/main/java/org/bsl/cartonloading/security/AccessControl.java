@@ -29,6 +29,10 @@ public class AccessControl {
         return currentUser().map(user -> user.isEnabled() && user.canAssignBarcode()).orElse(false);
     }
 
+    public boolean canPickPo() { return currentUser().map(user -> user.isEnabled() && user.canPickPo()).orElse(false); }
+
+    public boolean canAssignWeight() { return currentUser().map(user -> user.isEnabled() && user.canAssignWeight()).orElse(false); }
+
     public boolean canWeightCheck() {
         return currentUser().map(user -> user.isEnabled() && user.canWeightCheck()).orElse(false);
     }
@@ -42,7 +46,10 @@ public class AccessControl {
     }
 
     public boolean canAccessBuyer(String buyerCode) {
-        return currentUser().map(user -> user.isEnabled() && user.canAccessBuyer(buyerCode)).orElse(false);
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !(auth.getDetails() instanceof WorkspaceSession session)
+                || !session.buyer().equals(org.bsl.cartonloading.model.BuyerAccess.normalize(buyerCode))) return false;
+        return currentUser().map(user -> user.isEnabled() && user.canAccessBuyerType(session.buyer(), session.type())).orElse(false);
     }
 
     public boolean canAccessFactory(String factoryCode) {

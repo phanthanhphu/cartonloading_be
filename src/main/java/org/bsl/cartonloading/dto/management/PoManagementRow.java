@@ -36,6 +36,7 @@ public record PoManagementRow(
         Double netWeightKg,
         Double grossWeightKg,
         LocalDate exFtyDate,
+        LocalDate plannedShippingDate,
         List<String> allBpHeaders,
         List<Map<String, String>> allBpRows,
         int scannedQty,
@@ -48,9 +49,15 @@ public record PoManagementRow(
         int identifiedFullCartons,
         int identifiedRemainderQty,
         int identifiedRemainderCartons,
+        int completedQty,
+        int completedCartons,
+        int completedFullCartons,
+        int completedRemainderQty,
+        int completedRemainderCartons,
         boolean weightEditLocked,
         boolean picked,
-        boolean hasOperationalData
+        boolean hasOperationalData,
+        PoInspectionProgress inspectionProgress
 ) {
     public PoManagementRow(
             String key,
@@ -69,9 +76,10 @@ public record PoManagementRow(
                 cartonCount, itemCount,
                 null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null,
-                null, null,
+                null, null, null,
                 0, 0, 0, 0, 0,
                 0, 0, 0, 0, 0,
-                false, false, false);
+                0, 0, 0, 0, 0,
+                false, false, false, null);
     }
 }

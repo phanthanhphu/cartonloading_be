@@ -95,19 +95,12 @@ public class LululemonRfidService {
     public synchronized RfidScanSession start(String orderId, String poId, RfidStartRequest request) {
         Carton carton = requireCarton(orderId, poId, request == null ? null : request.sscc());
         PurchaseOrder po = requirePo(orderId, poId);
-        // Weight-first pilot: RFID may only begin after this specific carton has a SAVED PASS weight.
-        // UI handoff is not a physical conveyor command. Existing weight evidence is preserved.
-        if (!AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())) {
-            throw new IllegalArgumentException("Weight PASS must be saved before moving this carton to RFID.");
-        }
-        // A stopped weighing station must not block RFID review/rescan of a carton that
-        // already has persisted Weight PASS. This does NOT reopen/rewrite its weight result.
-        // Initial/unstarted POs remain blocked, and actual weight submissions still require RUNNING.
-        if (!AppConstants.WeighingSessionStatus.RUNNING.equals(po.getWeighingSessionStatus())
-                && !AppConstants.WeighingSessionStatus.STOPPED.equals(po.getWeighingSessionStatus())
-                && !AppConstants.WeighingSessionStatus.COMPLETED.equals(po.getWeighingSessionStatus())) {
-            throw new IllegalArgumentException("Start Carton Weight before RFID, or resume RFID review for a previously weighed carton.");
-        }
+        // Do not rescan while a saved weight is still authoritative. Admin must
+        // first reopen the direct-station weight (audit history is retained).
+        if (carton.getWeightStatus() != null)
+            throw new IllegalArgumentException("Weight already saved. Admin must reopen weight before another RFID scan.");
+        // Factory-scoped carton processing: RFID runs BEFORE weighing.
+        // The persisted carton identity, not PO picking or Shipping dispatch, is the gate.
         if (!CartonWeightReadiness.isReady(po, carton)) {
             throw new IllegalArgumentException("Carton needs a confirmed SSCC, planned Qty and SKU identity before RFID scan.");
         }
@@ -200,9 +193,8 @@ public class LululemonRfidService {
     /** Called by PDA test upload or future fixed-reader bridge, both through the same API. */
     public synchronized RfidScanSession ingest(String orderId, String poId, String sscc, RfidEpcRequest request) {
         Carton carton = requireCarton(orderId, poId, sscc);
-        if (!AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())) {
-            throw new IllegalArgumentException("Weight PASS must be saved before accepting RFID reads for this carton.");
-        }
+        // New station order is RFID -> Weight; do not require a saved weight here.
+        // currentSession() still validates SSCC, session ownership and state.
         RfidScanSession session = currentSession(carton, request == null ? null : request.sessionId());
         if (request == null || request.epcs() == null || request.epcs().isEmpty()) {
             throw new IllegalArgumentException("At least one EPC is required.");
@@ -249,9 +241,6 @@ public class LululemonRfidService {
 
     public synchronized RfidScanSession finish(String orderId, String poId, String sscc, String sessionId) {
         Carton carton = requireCarton(orderId, poId, sscc);
-        if (!AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())) {
-            throw new IllegalArgumentException("Weight PASS must be saved before final RFID verification.");
-        }
         RfidScanSession session = currentSession(carton, sessionId);
         List<String> errors = new ArrayList<>();
         if (!Objects.equals(session.getExpectedQty(), session.getActualQty())) {

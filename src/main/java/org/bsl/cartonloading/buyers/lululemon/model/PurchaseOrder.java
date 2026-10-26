@@ -78,6 +78,13 @@ public class PurchaseOrder {
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate exFtyDate;
 
+    /** Shipping allocation date chosen by Sales; independent from ALL_BP HOD / Ex-Factory fields. */
+    @JsonFormat(pattern = "yyyy-MM-dd")
+    private LocalDate plannedShippingDate;
+    private String shippingScheduledBy;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    private LocalDateTime shippingScheduledAt;
+
     private String status;
 
     /** Carton Weighing station session state for this logical PO. */

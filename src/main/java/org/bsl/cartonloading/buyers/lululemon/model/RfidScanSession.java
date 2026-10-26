@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.buyers.lululemon.model;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
@@ -13,7 +15,7 @@ import java.util.List;
 /** Persist every attempt independently so a failed/rescanned carton remains traceable. */
 @Data
 @NoArgsConstructor
-@Document(collection = "lululemon_rfid_scan_sessions")
+@Document(collection = AppConstants.Collection.RFID_SCAN_SESSIONS)
 @CompoundIndex(name = "rfid_carton_history", def = "{'buyerCode':1,'cartonId':1,'startedAt':-1}")
 public class RfidScanSession {
     @Id private String id;

@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Optional;
 
 public interface PurchaseOrderRepository extends MongoRepository<PurchaseOrder, String> {
+    List<PurchaseOrder> findByBuyerCodeAndFactoryCode(String buyerCode, String factoryCode);
+    List<PurchaseOrder> findByBuyerCode(String buyerCode);
     List<PurchaseOrder> findByOrderIdAndBuyerCodeOrderByPoNumberAsc(String orderId, String buyerCode);
     Page<PurchaseOrder> findByOrderIdAndBuyerCode(String orderId, String buyerCode, Pageable pageable);
     List<PurchaseOrder> findAllByOrderIdAndBuyerCodeAndPoNumber(String orderId, String buyerCode, String poNumber);

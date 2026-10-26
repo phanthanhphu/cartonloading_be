@@ -43,7 +43,12 @@ public class CartonWeightStationController {
 
     @GetMapping("/history")
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.canManageSales() or @accessControl.canAssignBarcode())")
-    public List<CartonWeightHistoryRow> history(@PathVariable String buyer) {
-        return service.stationHistory(buyer);
+    public List<CartonWeightHistoryRow> history(@PathVariable String buyer,
+            @RequestParam(required = false) String factoryCode) {
+        List<CartonWeightHistoryRow> accessible = service.stationHistory(buyer);
+        if (factoryCode == null || factoryCode.isBlank()) return accessible; // old clients
+        String factory = factoryCode.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!factory.matches("F[1-9][0-9]*")) throw new IllegalArgumentException("Invalid Factory code.");
+        return accessible.stream().filter(row -> factory.equalsIgnoreCase(row.factoryCode())).toList();
     }
 }

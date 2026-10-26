@@ -32,6 +32,8 @@ public class FactoryBarcode {
 
     /** Assignment snapshot for quick traceability/search. */
     private String assignedBuyerCode;
+    @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
+    private String buyerKey;
     private String assignedOrderId;
     private String assignedOrderName;
     private String assignedCartonId;

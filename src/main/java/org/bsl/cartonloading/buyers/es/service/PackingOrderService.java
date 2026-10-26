@@ -3,6 +3,7 @@ package org.bsl.cartonloading.buyers.es.service;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.service.RequestActor;
+import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
 import org.bsl.cartonloading.buyers.es.enums.PackingOrderStatus;
 import org.bsl.cartonloading.buyers.es.enums.WeightStatus;
 
@@ -34,17 +35,20 @@ import java.util.stream.Collectors;
 @Service
 public class PackingOrderService {
     private final PackingOrderRepository orderRepository;
+    private final BuyerFactoryAccessService factoryAccess;
     private final PackingAllocationLineRepository masterLineRepository;
     private final PackingListLineRepository packingLineRepository;
     private final CartonScanTransactionRepository cartonTransactionRepository;
 
     public PackingOrderService(
             PackingOrderRepository orderRepository,
+            BuyerFactoryAccessService factoryAccess,
             PackingAllocationLineRepository masterLineRepository,
             PackingListLineRepository packingLineRepository,
             CartonScanTransactionRepository cartonTransactionRepository
     ) {
         this.orderRepository = orderRepository;
+        this.factoryAccess = factoryAccess;
         this.masterLineRepository = masterLineRepository;
         this.packingLineRepository = packingLineRepository;
         this.cartonTransactionRepository = cartonTransactionRepository;
@@ -84,17 +88,37 @@ public class PackingOrderService {
         String orderNameKey = key(orderName);
         String supplierKey = key(supplierName);
         String factoryKey = key(productionFacility);
+        boolean lulu = AppConstants.Buyer.LULULEMON.equals(buyer);
+        String selectedFactory = lulu && productionFacility != null ? productionFacility.trim().toUpperCase(Locale.ROOT) : "";
+        if (lulu && !selectedFactory.isBlank() && !"UNASSIGNED".equals(selectedFactory)
+                && !canReadFactory(selectedFactory))
+            throw new org.springframework.security.access.AccessDeniedException("Order Factory access denied: " + selectedFactory);
+        boolean unrestricted = lulu && factoryAccess.isUnrestricted();
+        List<String> accessibleFactories = lulu && !unrestricted
+                ? java.util.stream.Stream.concat(factoryAccess.accessibleFactories().stream(),
+                    factoryAccess.currentUser().canWeightCheck()
+                        ? factoryAccess.currentUser().getWeighingFactoryPermissions().stream()
+                        : java.util.stream.Stream.<String>empty())
+                    .distinct().filter(this::canReadFactory).toList()
+                : List.of();
+        if (lulu && "UNASSIGNED".equals(selectedFactory) && !unrestricted)
+            throw new org.springframework.security.access.AccessDeniedException("Only Admin can classify unassigned Orders.");
         String createdByKey = key(createdBy);
         String statusKey = normalizedStatus(status);
         String assignmentStatusKey = normalizedStatus(assignmentStatus);
         Pageable pageable = PageRequest.of(Math.max(0, page), Math.max(1, Math.min(size, 100)));
 
         List<PackingOrderResponse> rows = orderRepository.findByBuyerCode(buyer).stream()
+                .filter(order -> !lulu || unrestricted
+                        || (order.getFactoryCode() != null && accessibleFactories.contains(order.getFactoryCode().toUpperCase(Locale.ROOT))))
                 .map(this::response)
+                .filter(order -> !lulu || selectedFactory.isBlank()
+                        || ("UNASSIGNED".equals(selectedFactory) ? order.factoryCode() == null || order.factoryCode().isBlank()
+                        : selectedFactory.equalsIgnoreCase(order.factoryCode())))
                 .filter(order -> orderDate == null || orderDate.equals(order.orderDate()))
                 .filter(order -> orderNameKey == null || contains(order.orderName(), orderNameKey))
                 .filter(order -> supplierKey == null || contains(order.supplierName(), supplierKey) || contains(order.supplierNumber(), supplierKey))
-                .filter(order -> factoryKey == null || contains(order.productionFacility(), factoryKey))
+                .filter(order -> lulu || factoryKey == null || contains(order.productionFacility(), factoryKey))
                 .filter(order -> createdByKey == null || contains(order.createdBy(), createdByKey))
                 .filter(order -> statusKey == null || statusKey.equals(normalizedStatus(order.status())))
                 .filter(order -> assignmentStatusKey == null || assignmentStatusKey.equals(normalizedStatus(order.assignmentStatus())))
@@ -116,8 +140,17 @@ public class PackingOrderService {
 
     public PackingOrder getEntity(String buyerCode, String id) {
         String buyer = requireBuyer(buyerCode);
-        return orderRepository.findByIdAndBuyerCode(id, buyer)
+        PackingOrder order = orderRepository.findByIdAndBuyerCode(id, buyer)
                 .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.ORDER_NOT_FOUND));
+        if (AppConstants.Buyer.LULULEMON.equals(buyer)) {
+            if (order.getFactoryCode() == null || order.getFactoryCode().isBlank()) {
+                if (!factoryAccess.isUnrestricted())
+                    throw new org.springframework.security.access.AccessDeniedException("Order has no Factory. Ask Admin to classify it.");
+            } else if (!canReadFactory(order.getFactoryCode())) {
+                throw new org.springframework.security.access.AccessDeniedException("Order Factory access denied: " + order.getFactoryCode());
+            }
+        }
+        return order;
     }
 
     public PackingOrderResponse create(String buyerCode, PackingOrderRequest request) {
@@ -126,7 +159,9 @@ public class PackingOrderService {
 
         PackingOrder entity = new PackingOrder();
         entity.setBuyerCode(buyer);
+        entity.setBuyerKey(buyer);
         apply(entity, request);
+        assignFactory(buyer, entity, request);
         entity.setCreatedBy(RequestActor.current());
         entity.setUpdatedBy(RequestActor.current());
         entity.setCreatedAt(now);
@@ -136,7 +171,9 @@ public class PackingOrderService {
 
     public PackingOrderResponse update(String buyerCode, String id, PackingOrderRequest request) {
         PackingOrder entity = getEntity(buyerCode, id);
+        entity.setBuyerKey(requireBuyer(buyerCode));
         apply(entity, request);
+        assignFactory(requireBuyer(buyerCode), entity, request);
         entity.setUpdatedBy(RequestActor.current());
         entity.setUpdatedAt(LocalDateTime.now());
         return response(orderRepository.save(entity));
@@ -154,9 +191,32 @@ public class PackingOrderService {
     }
 
     public void touchFromMaster(PackingOrder entity) {
+        entity.setBuyerKey(entity.getBuyerCode());
         entity.setUpdatedBy(RequestActor.current());
         entity.setUpdatedAt(LocalDateTime.now());
         orderRepository.save(entity);
+    }
+
+    private boolean canReadFactory(String factory) {
+        return factoryAccess.canAccessAssignedFactory(factory)
+                || (factoryAccess.currentUser().canWeightCheck()
+                    && factoryAccess.canAccessWeighingFactory(factory));
+    }
+
+    /** Factory is mandatory on new LULULEMON Orders, immutable after it has been set.
+     * Admin may explicitly classify legacy unassigned Orders; ES remains untouched.
+     */
+    private void assignFactory(String buyer, PackingOrder entity, PackingOrderRequest request) {
+        if (!AppConstants.Buyer.LULULEMON.equals(buyer)) return;
+        String requested = request.factoryCode() == null ? "" : request.factoryCode().trim().toUpperCase(Locale.ROOT);
+        if (requested.isBlank()) throw new WorkflowValidationException("Select a Factory for this LULULEMON Order.");
+        factoryAccess.assertAssignedFactoryAccess(requested);
+        String existing = entity.getFactoryCode();
+        if (existing != null && !existing.isBlank() && !existing.equalsIgnoreCase(requested))
+            throw new WorkflowValidationException("Order Factory cannot be changed. Create a new Order for another Factory.");
+        if ((existing == null || existing.isBlank()) && entity.getId() != null && !factoryAccess.isUnrestricted())
+            throw new org.springframework.security.access.AccessDeniedException("Only Admin may classify legacy Orders.");
+        entity.setFactoryCode(requested);
     }
 
     private void apply(PackingOrder entity, PackingOrderRequest request) {
@@ -241,7 +301,8 @@ public class PackingOrderService {
                 entity.getCreatedBy(),
                 entity.getUpdatedBy(),
                 entity.getCreatedAt(),
-                entity.getUpdatedAt()
+                entity.getUpdatedAt(),
+                entity.getFactoryCode()
         );
     }
 

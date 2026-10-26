@@ -9,6 +9,9 @@ import org.bsl.cartonloading.dto.ApiError;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -33,6 +36,24 @@ public class GlobalExceptionHandler {
         return json(HttpStatus.BAD_REQUEST, new ApiError(HttpStatus.BAD_REQUEST.value(), ex.getMessage()));
     }
 
+
+    /** Authorization failures are not server bugs. Do not mask them as generic 500s. */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiError> handleAccessDenied(AccessDeniedException ex) {
+        logger.warn("Access denied: {}", ex.getMessage());
+        return json(HttpStatus.FORBIDDEN,
+                new ApiError(HttpStatus.FORBIDDEN.value(), ex.getMessage() == null
+                        ? "Access denied." : ex.getMessage()));
+    }
+
+    /** Concurrent/duplicate SSCC or item assignment must not appear as a server crash. */
+    @ExceptionHandler({DuplicateKeyException.class, DataIntegrityViolationException.class})
+    public ResponseEntity<ApiError> handleDataConflict(RuntimeException ex) {
+        logger.warn("Data conflict while saving: {}", ex.getMessage());
+        return json(HttpStatus.CONFLICT,
+                new ApiError(HttpStatus.CONFLICT.value(),
+                        "Record conflict (possibly an SSCC already assigned). Refresh the PO and check its cartons before retrying."));
+    }
 
     @ExceptionHandler(WorkflowNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(WorkflowNotFoundException ex) {

@@ -17,8 +17,9 @@ const ACTIVE_COLLECTIONS = new Set([
   'carton_operations', 'factory_barcodes', 'scale_stations', 'shipments',
   'purchase_orders', 'cartons', 'carton_items', 'scan_events',
   'weighing_profiles', 'weighing_orders', 'weighing_results',
-  'shipping_schedules', 'lululemon_carton_checking_history',
-  'lululemon_rfid_scan_sessions'
+  'shipping_schedules', 'carton_checking_history',
+  'po_pick_claims', 'po_pick_history', 'rfid_scan_sessions',
+  'rfid_pda_captures', 'rfid_pda_devices', 'scale_plc_devices'
 ]);
 const RETIRED_COLLECTIONS = new Set(['print_handoffs']);
 const databaseName = db.getName();

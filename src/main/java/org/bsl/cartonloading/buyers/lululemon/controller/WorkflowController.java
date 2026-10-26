@@ -221,6 +221,17 @@ public class WorkflowController {
         return service.reopenCarton(buyer, orderId, cartonId, request);
     }
 
+    @PostMapping("/cartons/{cartonId}/identity/unassign")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canAssignBarcode() or @accessControl.canWeightCheck() or @accessControl.isAdmin())")
+    public Carton unassignNewIdentity(
+            @PathVariable String buyer,
+            @PathVariable String orderId,
+            @PathVariable String cartonId,
+            @RequestBody ExceptionRequest request
+    ) {
+        return service.unassignNewCartonIdentity(buyer, orderId, cartonId, request);
+    }
+
     @PostMapping("/cartons/{cartonId}/sscc/unassign")
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.isAdmin()")
     public Carton unassignSscc(

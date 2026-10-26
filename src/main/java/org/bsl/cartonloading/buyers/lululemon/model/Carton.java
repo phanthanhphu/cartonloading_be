@@ -80,19 +80,11 @@ public class Carton {
      * This works for historical cartons without introducing a data migration.
      */
     public String getFinalCheckStatus() {
-        if (AppConstants.WeightStatus.FAILED.equals(weightStatus) || "HOLD".equals(weightStatus)) {
-            return "WEIGHT_FAILED";
-        }
-        if (!AppConstants.WeightStatus.PASS.equals(weightStatus)) {
-            return "WAITING_WEIGHT";
-        }
-        if ("PASS".equals(rfidStatus)) {
-            return "FINAL_PASS";
-        }
-        if ("FAILED".equals(rfidStatus)) {
-            return "RFID_HOLD";
-        }
-        return "WAITING_RFID";
+        if ("FAILED".equals(rfidStatus)) return "RFID_HOLD";
+        if (!"PASS".equals(rfidStatus)) return "WAITING_RFID";
+        if (AppConstants.WeightStatus.FAILED.equals(weightStatus) || "HOLD".equals(weightStatus)) return "WEIGHT_FAILED";
+        if (!AppConstants.WeightStatus.PASS.equals(weightStatus)) return "WAITING_WEIGHT";
+        return "FINAL_PASS";
     }
 
     // Compatibility alias: the original model persists the official SSCC as

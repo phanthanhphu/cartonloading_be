@@ -22,7 +22,7 @@ public class LululemonRfidController {
     }
 
     @GetMapping("/history")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.canAssignBarcode() or @accessControl.isAdmin())")
     public List<RfidScanSession> history(@PathVariable String buyer, @PathVariable String orderId,
                                          @PathVariable String poId, @RequestParam String sscc) {
         assertBuyer(buyer);
@@ -30,7 +30,7 @@ public class LululemonRfidController {
     }
 
     @GetMapping("/latest")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.canAssignBarcode() or @accessControl.isAdmin())")
     public RfidScanSession latest(@PathVariable String buyer, @PathVariable String orderId,
                                   @PathVariable String poId, @RequestParam String sscc) {
         assertBuyer(buyer);
@@ -38,7 +38,7 @@ public class LululemonRfidController {
     }
 
     @PostMapping("/start")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.canAssignBarcode() or @accessControl.isAdmin())")
     public RfidScanSession start(@PathVariable String buyer, @PathVariable String orderId,
                                  @PathVariable String poId, @RequestBody RfidStartRequest request) {
         assertBuyer(buyer);
@@ -46,7 +46,7 @@ public class LululemonRfidController {
     }
 
     @PostMapping("/reads")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.canAssignBarcode() or @accessControl.isAdmin())")
     public RfidScanSession reads(@PathVariable String buyer, @PathVariable String orderId,
                                  @PathVariable String poId, @RequestParam String sscc,
                                  @RequestBody RfidEpcRequest request) {
@@ -55,7 +55,7 @@ public class LululemonRfidController {
     }
 
     @PostMapping("/finish")
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.canAssignBarcode() or @accessControl.isAdmin())")
     public RfidScanSession finish(@PathVariable String buyer, @PathVariable String orderId,
                                   @PathVariable String poId, @RequestBody RfidEpcRequest request,
                                   @RequestParam String sscc) {

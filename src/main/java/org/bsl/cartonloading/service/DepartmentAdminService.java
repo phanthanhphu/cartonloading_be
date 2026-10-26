@@ -1,6 +1,7 @@
 package org.bsl.cartonloading.service;
 
 import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.factory.FactoryCodes;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.dto.admin.DepartmentRequest;
 import org.bsl.cartonloading.model.Department;
@@ -11,6 +12,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 
 import java.time.LocalDateTime;
 import java.util.Comparator;
@@ -22,11 +24,15 @@ public class DepartmentAdminService {
     private final DepartmentRepository repository;
     private final UserRepository userRepository;
     private final AuditLogService audit;
+    private final FactoryCatalogService factories;
+    private final AppSocketPublisher socketPublisher;
 
-    public DepartmentAdminService(DepartmentRepository repository, UserRepository userRepository, AuditLogService audit) {
+    public DepartmentAdminService(DepartmentRepository repository, UserRepository userRepository, AuditLogService audit, FactoryCatalogService factories, AppSocketPublisher socketPublisher) {
         this.repository = repository;
         this.userRepository = userRepository;
         this.audit = audit;
+        this.factories = factories;
+        this.socketPublisher = socketPublisher;
     }
 
     public Page<Department> list(String factory, String division, String departmentName, int page, int size) {
@@ -62,6 +68,7 @@ public class DepartmentAdminService {
         row.setUpdatedAt(row.getCreatedAt());
         Department saved = repository.save(row);
         audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.DEPARTMENT, saved.getId(), label(saved), null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.DEPARTMENT, AppConstants.AuditAction.CREATE);
         return saved;
     }
 
@@ -79,6 +86,7 @@ public class DepartmentAdminService {
         row.setUpdatedAt(LocalDateTime.now());
         Department saved = repository.save(row);
         audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.DEPARTMENT, saved.getId(), label(saved), null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.DEPARTMENT, AppConstants.AuditAction.UPDATE);
         return saved;
     }
 
@@ -90,6 +98,7 @@ public class DepartmentAdminService {
         Department row = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(AppMessages.DEPARTMENT_NOT_FOUND));
         repository.deleteById(id);
         audit.log(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.DEPARTMENT, id, label(row), null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.DEPARTMENT, AppConstants.AuditAction.DELETE);
     }
 
     private String label(Department row) {
@@ -97,8 +106,8 @@ public class DepartmentAdminService {
     }
 
     private String factory(String value) {
-        String v = required(value, AppMessages.FACTORY_REQUIRED).toUpperCase(Locale.ROOT);
-        if (!v.matches("F[1-7]")) throw new IllegalArgumentException(AppMessages.FACTORY_RANGE_F1_F7);
+        String v = FactoryCodes.requireValid(required(value, AppMessages.FACTORY_REQUIRED));
+        factories.requireActive(AppConstants.Buyer.LULULEMON, v);
         return v;
     }
 

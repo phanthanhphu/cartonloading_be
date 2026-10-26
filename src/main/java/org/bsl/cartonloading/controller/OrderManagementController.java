@@ -7,6 +7,7 @@ import org.bsl.cartonloading.buyers.es.dto.PackingOrderResponse;
 import org.bsl.cartonloading.dto.management.CartonManagementRow;
 import org.bsl.cartonloading.dto.management.ItemManagementRow;
 import org.bsl.cartonloading.dto.management.PoManagementRow;
+import org.bsl.cartonloading.dto.management.ScheduledPoInspectionSummary;
 import org.bsl.cartonloading.service.OrderManagementService;
 import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
@@ -52,9 +53,22 @@ public class OrderManagementController {
             @RequestParam(required=false) String style, @RequestParam(required=false) String sku,
             @RequestParam(required=false) String destination, @RequestParam(required=false) String status,
             @RequestParam(required=false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate exFtyDate,
+            @RequestParam(required=false) Boolean shippingScheduled,
+            @RequestParam(required=false) String inspectionStatus,
+            @RequestParam(required=false) String search,
+            @RequestParam(required=false) String masterPo,
+            @RequestParam(required=false) String description,
+            @RequestParam(required=false) String color,
+            @RequestParam(required=false) String qty,
             @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
-        return service.listPos(buyer, orderId, poNumber, factory, style, sku, destination, status, exFtyDate, page, size);
+        return service.listPos(buyer, orderId, poNumber, factory, style, sku, destination, status, exFtyDate, shippingScheduled, inspectionStatus, search, masterPo, description, color, qty, page, size);
     }
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @GetMapping("/orders/{orderId}/pos/scheduled-inspection-summary")
+    public ScheduledPoInspectionSummary scheduledInspectionSummary(@RequestParam String buyer, @PathVariable String orderId) {
+        return service.scheduledPoInspectionSummary(buyer, orderId);
+    }
+
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
     @GetMapping("/orders/{orderId}/pos/{poKey}")
     public PoManagementRow po(@RequestParam String buyer, @PathVariable String orderId, @PathVariable String poKey) {
