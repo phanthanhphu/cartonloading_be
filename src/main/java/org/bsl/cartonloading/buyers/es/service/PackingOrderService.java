@@ -153,6 +153,37 @@ public class PackingOrderService {
         return order;
     }
 
+    /** A duplicate is defined within the same Buyer + Factory, ignoring case,
+     * leading/trailing spaces, and repeated whitespace in the Order name.
+     * Existing legacy Orders without orderNameKey are also checked.
+     */
+    private static String orderNameKey(String name) {
+        if (name == null) return "";
+        return name.strip().replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
+    }
+
+    public boolean duplicateOrderName(String buyerCode, String factoryCode, String name, String excludeOrderId) {
+        String buyer = requireBuyer(buyerCode);
+        if (!AppConstants.Buyer.LULULEMON.equals(buyer)) return false;
+        if (name == null || name.isBlank()) return false;
+        String factory = factoryCode == null ? "" : factoryCode.trim().toUpperCase(Locale.ROOT);
+        if (factory.isBlank()) throw new WorkflowValidationException("Select a Factory before entering the Order name.");
+        factoryAccess.assertAssignedFactoryAccess(factory);
+        String key = orderNameKey(name);
+        return orderRepository.findByBuyerCodeAndFactoryCode(buyer, factory).stream()
+                .anyMatch(existing -> !java.util.Objects.equals(existing.getId(), excludeOrderId)
+                        && key.equals(orderNameKey(existing.getOrderName())));
+    }
+
+    private void assertUniqueOrderName(PackingOrder entity, String buyer) {
+        if (!AppConstants.Buyer.LULULEMON.equals(buyer)) return;
+        if (duplicateOrderName(buyer, entity.getFactoryCode(), entity.getOrderName(), entity.getId())) {
+            throw new WorkflowValidationException("Order name already exists in Factory "
+                    + entity.getFactoryCode() + ". Enter another Order name.");
+        }
+        entity.setOrderNameKey(orderNameKey(entity.getOrderName()));
+    }
+
     public PackingOrderResponse create(String buyerCode, PackingOrderRequest request) {
         String buyer = requireBuyer(buyerCode);
         LocalDateTime now = LocalDateTime.now();
@@ -160,23 +191,37 @@ public class PackingOrderService {
         PackingOrder entity = new PackingOrder();
         entity.setBuyerCode(buyer);
         entity.setBuyerKey(buyer);
-        apply(entity, request);
+        apply(entity, request, buyer, true);
         assignFactory(buyer, entity, request);
+        assertUniqueOrderName(entity, buyer);
         entity.setCreatedBy(RequestActor.current());
         entity.setUpdatedBy(RequestActor.current());
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
-        return response(orderRepository.save(entity));
+        try {
+            return response(orderRepository.save(entity));
+        } catch (org.springframework.dao.DuplicateKeyException ex) {
+            if (AppConstants.Buyer.LULULEMON.equals(buyer))
+                throw new WorkflowValidationException("Order name already exists in this Factory. Enter another Order name.");
+            throw ex;
+        }
     }
 
     public PackingOrderResponse update(String buyerCode, String id, PackingOrderRequest request) {
         PackingOrder entity = getEntity(buyerCode, id);
         entity.setBuyerKey(requireBuyer(buyerCode));
-        apply(entity, request);
+        apply(entity, request, requireBuyer(buyerCode), false);
         assignFactory(requireBuyer(buyerCode), entity, request);
+        assertUniqueOrderName(entity, requireBuyer(buyerCode));
         entity.setUpdatedBy(RequestActor.current());
         entity.setUpdatedAt(LocalDateTime.now());
-        return response(orderRepository.save(entity));
+        try {
+            return response(orderRepository.save(entity));
+        } catch (org.springframework.dao.DuplicateKeyException ex) {
+            if (AppConstants.Buyer.LULULEMON.equals(requireBuyer(buyerCode)))
+                throw new WorkflowValidationException("Order name already exists in this Factory. Enter another Order name.");
+            throw ex;
+        }
     }
 
     public void delete(String buyerCode, String id) {
@@ -219,18 +264,28 @@ public class PackingOrderService {
         entity.setFactoryCode(requested);
     }
 
-    private void apply(PackingOrder entity, PackingOrderRequest request) {
-        if (request.orderDate() == null) {
-            throw new WorkflowValidationException(AppMessages.START_ORDER_REQUIRED);
+    private void apply(PackingOrder entity, PackingOrderRequest request, String buyer, boolean creating) {
+        if (AppConstants.Buyer.LULULEMON.equals(buyer)) {
+            // LULULEMON's start date is the date of creation (set by the server).
+            // Editing does not change the original creation date or legacy end date.
+            if (creating || entity.getOrderDate() == null) {
+                entity.setOrderDate(LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh")));
+            }
+            if (creating) entity.setEndOrderDate(null);
+        } else {
+            // ES retains the existing mandatory start/end and range validation.
+            if (request.orderDate() == null) {
+                throw new WorkflowValidationException(AppMessages.START_ORDER_REQUIRED);
+            }
+            entity.setOrderDate(request.orderDate());
+            if (request.endOrderDate() == null) {
+                throw new WorkflowValidationException(AppMessages.END_ORDER_REQUIRED);
+            }
+            if (request.endOrderDate().isBefore(request.orderDate())) {
+                throw new WorkflowValidationException(AppMessages.END_ORDER_BEFORE_START);
+            }
+            entity.setEndOrderDate(request.endOrderDate());
         }
-        entity.setOrderDate(request.orderDate());
-        if (request.endOrderDate() == null) {
-            throw new WorkflowValidationException(AppMessages.END_ORDER_REQUIRED);
-        }
-        if (request.endOrderDate().isBefore(request.orderDate())) {
-            throw new WorkflowValidationException(AppMessages.END_ORDER_BEFORE_START);
-        }
-        entity.setEndOrderDate(request.endOrderDate());
         entity.setOrderName(required(request.orderName(), AppMessages.ORDER_NAME_REQUIRED));
         entity.setSupplierName(trimToNull(request.supplierName()));
         entity.setSupplierNumber(trimToNull(request.supplierNumber()));

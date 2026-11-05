@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
+import org.bsl.cartonloading.model.CartonProcessingHistory;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
 import org.bsl.cartonloading.buyers.es.model.PackingListLine;
@@ -107,6 +108,7 @@ public class LululemonTestCleanupService {
 
     private java.util.List<Target> targets(String orderId) {
         java.util.List<Target> targets = new java.util.ArrayList<>();
+        add(targets, "ALL_BP import batches", PackingImportBatch.class, ownerQuery(orderId));
         add(targets, "RFID sessions", RfidScanSession.class, ownerQuery(orderId));
         add(targets, "PDA captures", RfidPdaCapture.class, captureQuery(orderId));
         add(targets, "PO Pick claims", PoPickClaim.class, ownerQuery(orderId));
@@ -114,6 +116,7 @@ public class LululemonTestCleanupService {
         add(targets, "Checking history", CartonCheckingRecord.class, ownerQuery(orderId));
         // Retired print requests were stored in a buyer+Order-scoped collection.
         targets.add(new Target("Legacy Print handoffs", "print_handoffs", ownerQuery(orderId)));
+        add(targets, "Completed carton history", CartonProcessingHistory.class, ownerQuery(orderId));
         add(targets, "Weight results", WeighingResult.class, ownerQuery(orderId));
         add(targets, "Weighing assignments", WeighingOrder.class, ownerQuery(orderId));
         add(targets, "Weight profiles", WeightProfile.class, ownerQuery(orderId));
@@ -126,6 +129,7 @@ public class LululemonTestCleanupService {
         add(targets, "Packing list lines", PackingListLine.class, ownerQuery(orderId));
         add(targets, "Packing allocation lines", PackingAllocationLine.class, ownerQuery(orderId));
         add(targets, "Carton operations", CartonScanTransaction.class, ownerQuery(orderId));
+        targets.add(new Target("PO identity registry", AppConstants.Collection.PO_IDENTITY_REGISTRY, ownerQuery(orderId)));
         return targets;
     }
 

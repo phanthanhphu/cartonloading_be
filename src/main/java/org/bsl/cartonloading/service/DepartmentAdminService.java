@@ -67,7 +67,7 @@ public class DepartmentAdminService {
         row.setCreatedAt(LocalDateTime.now());
         row.setUpdatedAt(row.getCreatedAt());
         Department saved = repository.save(row);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.DEPARTMENT, saved.getId(), label(saved), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.DEPARTMENT, saved.getId(), label(saved), AppConstants.Buyer.LULULEMON, saved.getFactory(), null, saved, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.DEPARTMENT, AppConstants.AuditAction.CREATE);
         return saved;
     }
@@ -80,12 +80,15 @@ public class DepartmentAdminService {
         repository.findByFactoryIgnoreCaseAndDivisionIgnoreCaseAndDepartmentNameIgnoreCase(factory, division, name)
                 .filter(other -> !other.getId().equals(id))
                 .ifPresent(other -> { throw new IllegalArgumentException(AppMessages.DEPARTMENT_ALREADY_EXISTS); });
+        java.util.Map<String, Object> before = audit.snapshot(row);
         row.setFactory(factory);
         row.setDivision(division);
         row.setDepartmentName(name);
         row.setUpdatedAt(LocalDateTime.now());
         Department saved = repository.save(row);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.DEPARTMENT, saved.getId(), label(saved), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.DEPARTMENT,
+                saved.getId(), label(saved), AppConstants.Buyer.LULULEMON,
+                before.get("factory") != null && !saved.getFactory().equals(before.get("factory")) ? null : saved.getFactory(), before, saved, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.DEPARTMENT, AppConstants.AuditAction.UPDATE);
         return saved;
     }
@@ -97,7 +100,7 @@ public class DepartmentAdminService {
         }
         Department row = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(AppMessages.DEPARTMENT_NOT_FOUND));
         repository.deleteById(id);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.DEPARTMENT, id, label(row), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.DEPARTMENT, id, label(row), AppConstants.Buyer.LULULEMON, row.getFactory(), row, null, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.DEPARTMENT, AppConstants.AuditAction.DELETE);
     }
 

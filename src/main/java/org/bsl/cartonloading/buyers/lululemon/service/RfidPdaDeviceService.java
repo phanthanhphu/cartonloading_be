@@ -185,6 +185,7 @@ public class RfidPdaDeviceService {
             config.setSerial(serial);
         }
         Set<String> previous = assignedFactories(config);
+        String previousLabel = config.getLabel();
         LinkedHashSet<String> wanted = new LinkedHashSet<>();
         if (settings.factoryCodes() != null) {
             for (String value : settings.factoryCodes()) {
@@ -192,6 +193,15 @@ public class RfidPdaDeviceService {
                 factories.requireActive(AppConstants.Buyer.LULULEMON, code);
                 wanted.add(code);
             }
+        }
+        // One assigned RFID reader per Factory. Existing multi-Factory readers
+        // remain supported, but a Factory cannot gain a second reader. Do not
+        // auto-delete or reassign previously configured hardware.
+        for (String code : wanted) {
+            boolean alreadyAssignedToOther = configs.findAll().stream().anyMatch(item ->
+                    !serial.equals(item.getSerial()) && assignedFactories(item).contains(code));
+            if (alreadyAssignedToOther && !previous.contains(code))
+                throw new IllegalArgumentException("Factory " + code + " already has an RFID reader. Unassign it before attaching another reader.");
         }
         // Users cannot add/remove assignments to factories where they have no weighing rights.
         for (String code : previous) if (!wanted.contains(code)) factoryAccess.assertWeighingFactoryAccess(code);
@@ -204,9 +214,9 @@ public class RfidPdaDeviceService {
             Set<String> personIds = new LinkedHashSet<>();
             for (String id : settings.assignedUserIds()) {
                 User user = users.findById(id).orElseThrow(() -> new IllegalArgumentException("RFID User not found"));
-                if (!user.isEnabled() || !user.canWeightCheck()
+                if (!user.isEnabled() || !user.canLululemonScanWeight()
                         || !user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
-                        || wanted.stream().noneMatch(user::canAccessWeighingFactory))
+                        || wanted.stream().noneMatch(user::canAccessFactory))
                     throw new IllegalArgumentException("RFID User must have Weight Check in an assigned Factory");
                 personIds.add(id);
             }
@@ -215,16 +225,107 @@ public class RfidPdaDeviceService {
         Set<String> defaults = defaultFactories(config);
         defaults.retainAll(wanted);
         updateAssignments(config, wanted, defaults);
-        if (!previous.equals(wanted)) {
-            // Audit BEFORE mutation: a failed audit must never silently change Factory ownership.
-            auditLogService.log(RequestActor.current(), "RFID_READER_FACTORY_ASSIGNMENT",
-                    AppConstants.AuditResource.CARTON_LOADING, serial,
-                    "Previous=" + previous + "; Assigned=" + wanted, null, null);
-        }
         configs.save(config);
+        // Scoped independent factory audit. Never include assignments for other factories.
+        Set<String> affected = new LinkedHashSet<>(previous);
+        affected.addAll(wanted);
+        for (String code : affected) {
+            auditLogService.logChange(RequestActor.current(), "RFID_READER_CONFIGURATION",
+                AppConstants.AuditResource.CARTON_LOADING, serial,
+                "RFID reader configuration for Factory " + code, AppConstants.Buyer.LULULEMON, code,
+                previous.contains(code) ? java.util.Map.of("assigned", true, "reader", serial, "label", String.valueOf(previousLabel)) : null,
+                wanted.contains(code) ? java.util.Map.of("assigned", true, "reader", serial, "label", config.getLabel()) : null,
+                null, null);
+        }
         for (String code : wanted) ensureDefault(code);
         for (String code : previous) if (!wanted.contains(code)) ensureDefault(code);
         return asDevice(configs.findById(serial).orElseThrow(), connectedDevices().get(serial), null);
+    }
+
+    /**
+     * Replace the RFID Reader assigned to one Factory with an ADB-over-TCP address.
+     * Old PDA records and scan history remain stored under their original serial.
+     * This does not migrate active capture sessions. Refuse while either PDA is busy.
+     */
+    public synchronized Device rebindFactoryReader(String oldSerial, String newSerial,
+                                                     String factoryCode, GlobalDeviceSettings settings) {
+        validSerial(oldSerial);
+        validSerial(newSerial);
+        if (oldSerial.equals(newSerial))
+            throw new IllegalArgumentException("New and existing RFID serial are identical. Use Save instead.");
+        String factory = factory(factoryCode);
+        factories.requireActive(AppConstants.Buyer.LULULEMON, factory);
+        if (settings == null || settings.factoryCodes() == null
+                || settings.factoryCodes().size() != 1
+                || !factory.equals(normalizeFactory(settings.factoryCodes().get(0))))
+            throw new IllegalArgumentException("RFID replacement must target exactly one Factory.");
+        RfidPdaDevice previous = configs.findById(oldSerial)
+                .orElseThrow(() -> new IllegalArgumentException("Existing RFID Reader not found."));
+        Set<String> originalFactories = assignedFactories(previous);
+        Set<String> originalDefaults = defaultFactories(previous);
+        if (!originalFactories.contains(factory))
+            throw new IllegalArgumentException("Existing RFID Reader is not assigned to this Factory.");
+        if (configs.existsById(newSerial))
+            throw new IllegalArgumentException("New ADB Serial is already registered. Select an unassigned reader.");
+        if (captureRepository.existsById(oldSerial) || captureRepository.existsById(newSerial))
+            throw new IllegalArgumentException("An RFID capture is active. Finish the carton before changing reader.");
+        if (configs.findAll().stream().anyMatch(d -> !oldSerial.equals(d.getSerial())
+                && assignedFactories(d).contains(factory)))
+            throw new IllegalArgumentException("Factory has multiple assigned readers. Resolve duplicates first.");
+        requireOnline(newSerial); // No registration of an offline/unauthorized ADB address.
+
+        boolean anyCoordinate = settings.startX() != null || settings.startY() != null
+                || settings.stopX() != null || settings.stopY() != null;
+        if (anyCoordinate) { point(settings.startX(), settings.startY()); point(settings.stopX(), settings.stopY()); }
+        Set<String> personIds = new LinkedHashSet<>();
+        if (settings.assignedUserIds() != null) for (String id : settings.assignedUserIds()) {
+            User user = users.findById(id)
+                    .orElseThrow(() -> new IllegalArgumentException("RFID User not found"));
+            if (!user.isEnabled() || !user.canLululemonScanWeight()
+                    || !user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                    || !user.canAccessFactory(factory))
+                throw new IllegalArgumentException("RFID User must have Weight Check for this Factory");
+            personIds.add(id);
+        }
+        RfidPdaDevice replacement = new RfidPdaDevice();
+        replacement.setSerial(newSerial);
+        String label = settings.label() == null ? "" : settings.label().trim();
+        replacement.setLabel(label.isBlank() ? newSerial : label.substring(0, Math.min(label.length(), 80)));
+        replacement.setAssignedUserIds(new ArrayList<>(personIds));
+        replacement.setStartX(settings.startX()); replacement.setStartY(settings.startY());
+        replacement.setStopX(settings.stopX()); replacement.setStopY(settings.stopY());
+        updateAssignments(replacement, Set.of(factory), Set.of(factory));
+
+        // Keep shared readers attached to their other Factories, if any.
+        Set<String> remainingFactories = new LinkedHashSet<>(originalFactories);
+        remainingFactories.remove(factory);
+        Set<String> remainingDefaults = new LinkedHashSet<>(originalDefaults);
+        remainingDefaults.remove(factory);
+        boolean insertedReplacement = false;
+        try {
+            updateAssignments(previous, remainingFactories, remainingDefaults);
+            configs.save(previous);
+            configs.insert(replacement); // Fail rather than silently update another PDA.
+            insertedReplacement = true;
+        } catch (RuntimeException failure) {
+            // Compensate for a failed write. Never delete a concurrent record that
+            // another process might have inserted under the same serial.
+            try {
+                if (insertedReplacement) configs.deleteById(newSerial);
+                updateAssignments(previous, originalFactories, originalDefaults);
+                configs.save(previous);
+            } catch (RuntimeException restoreError) {
+                failure.addSuppressed(restoreError);
+                throw new IllegalStateException("RFID replacement failed; verify Factory assignments in Device Management before retrying.", failure);
+            }
+            throw failure;
+        }
+        auditLogService.logChange(RequestActor.current(), "RFID_READER_REBIND",
+                AppConstants.AuditResource.CARTON_LOADING, newSerial,
+                "RFID reader replaced for Factory " + factory, AppConstants.Buyer.LULULEMON, factory,
+                Map.of("serial", oldSerial, "label", String.valueOf(previous.getLabel())),
+                Map.of("serial", newSerial, "label", replacement.getLabel()), null, null);
+        return asDevice(replacement, "device", factory);
     }
 
     public synchronized Device setDefault(String factoryCode, String serial) {
@@ -235,14 +336,16 @@ public class RfidPdaDeviceService {
                 .orElseThrow(() -> new IllegalArgumentException("Reader not configured."));
         if (!assignedFactories(config).contains(factory))
             throw new IllegalArgumentException("Reader is not assigned to " + factory + ".");
-        auditLogService.log(RequestActor.current(), "RFID_READER_DEFAULT_ASSIGNMENT",
-                AppConstants.AuditResource.CARTON_LOADING, serial,
-                "Default Reader for Factory=" + factory, null, null);
+        boolean wasDefault = defaultFactories(config).contains(factory);
         clearDefaults(factory, serial);
         Set<String> defaults = defaultFactories(config);
         defaults.add(factory);
         updateAssignments(config, assignedFactories(config), defaults);
         configs.save(config);
+        auditLogService.logChange(RequestActor.current(), "RFID_READER_DEFAULT_ASSIGNMENT",
+            AppConstants.AuditResource.CARTON_LOADING, serial,
+            "Default RFID Reader for Factory=" + factory, AppConstants.Buyer.LULULEMON, factory,
+            java.util.Map.of("defaultReader", wasDefault), java.util.Map.of("defaultReader", true), null, null);
         return asDevice(config, connectedDevices().get(serial), null);
     }
 
@@ -255,13 +358,14 @@ public class RfidPdaDeviceService {
                 .orElseThrow(() -> new IllegalArgumentException("Reader not configured."));
         Set<String> assigned = assignedFactories(config);
         if (!assigned.remove(factory)) throw new IllegalArgumentException("Reader not assigned to " + factory + ".");
-        auditLogService.log(RequestActor.current(), "RFID_READER_FACTORY_UNASSIGN",
-                AppConstants.AuditResource.CARTON_LOADING, serial,
-                "Removed Factory=" + factory + "; Remaining=" + assigned, null, null);
         Set<String> defaults = defaultFactories(config);
         defaults.remove(factory);
         updateAssignments(config, assigned, defaults);
         configs.save(config);
+        auditLogService.logChange(RequestActor.current(), "RFID_READER_FACTORY_UNASSIGN",
+                AppConstants.AuditResource.CARTON_LOADING, serial,
+                "Removed Reader from Factory=" + factory, AppConstants.Buyer.LULULEMON, factory,
+                java.util.Map.of("assignedReader", serial), null, null, null);
         ensureDefault(factory);
     }
 
@@ -274,11 +378,14 @@ public class RfidPdaDeviceService {
                 .orElseThrow(() -> new IllegalArgumentException("Reader configuration not found."));
         Set<String> previous = assignedFactories(config);
         for (String code : previous) factoryAccess.assertWeighingFactoryAccess(code);
-        auditLogService.log(RequestActor.current(), "RFID_READER_CONFIGURATION_DELETE",
-                AppConstants.AuditResource.CARTON_LOADING, serial,
-                "Deleted reader registration; Factory assignments=" + previous
-                        + "; RFID scan sessions and history preserved", null, null);
         configs.deleteById(serial);
+        for (String code : previous) {
+            auditLogService.logChange(RequestActor.current(), "RFID_READER_CONFIGURATION_DELETE",
+                AppConstants.AuditResource.CARTON_LOADING, serial,
+                "RFID reader registration deleted; historical RFID records preserved",
+                AppConstants.Buyer.LULULEMON, code,
+                java.util.Map.of("assignedReader", serial), null, null, null);
+        }
         for (String code : previous) ensureDefault(code);
     }
 

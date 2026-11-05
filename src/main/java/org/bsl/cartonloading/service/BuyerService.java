@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.service;
 
+import org.bsl.cartonloading.model.SystemType;
+import org.bsl.cartonloading.security.WorkspaceSession;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import jakarta.annotation.PostConstruct;
@@ -47,7 +49,7 @@ public class BuyerService {
                 buyer.setCreatedAt(now);
                 buyer.setCreatedBy("SYSTEM");
                 buyer.setActive(true);
-                buyer.setSupportedTypes(org.bsl.cartonloading.model.SystemType.legacyBuyerTypes(entry.getKey()));
+                buyer.setSupportedTypes(SystemType.legacyBuyerTypes(entry.getKey()));
             }
             if (buyer.getBuyerName() == null || buyer.getBuyerName().isBlank()) buyer.setBuyerName(entry.getValue());
             if (buyer.getSlug() == null || buyer.getSlug().isBlank()) buyer.setSlug(slugify(entry.getValue()));
@@ -70,7 +72,7 @@ public class BuyerService {
         List<Buyer> active = loginOptions();
         if (user.isAdminRole()) return active;
         org.springframework.security.core.Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !(authentication.getDetails() instanceof org.bsl.cartonloading.security.WorkspaceSession session))
+        if (authentication == null || !(authentication.getDetails() instanceof WorkspaceSession session))
             return List.of();
         return active.stream().filter(item -> item.getBuyerKey().equals(session.buyer())
                 && user.canAccessBuyerType(item.getBuyerKey(), session.type())).toList();
@@ -100,7 +102,7 @@ public class BuyerService {
         if (buyerRepository.findByBuyerKeyIgnoreCase(key).isPresent()) throw new IllegalArgumentException(AppMessages.BUYER_KEY_EXISTS);
         Buyer buyer = new Buyer(); buyer.setBuyerKey(key); buyer.setCreatedAt(LocalDateTime.now()); buyer.setCreatedBy(RequestActor.current());
         apply(buyer, request); Buyer saved = buyerRepository.save(buyer);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.BUYER, saved.getId(), AppMessages.buyerCreatedAudit(saved.getBuyerKey()), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.BUYER, saved.getId(), AppMessages.buyerCreatedAudit(saved.getBuyerKey()), saved.getBuyerKey(), null, null, saved, null, null);
         return saved;
     }
 
@@ -108,8 +110,9 @@ public class BuyerService {
         Buyer buyer = get(id);
         String key = BuyerAccess.normalize(request.buyerKey());
         if (!Objects.equals(key, buyer.getBuyerKey())) throw new IllegalArgumentException(AppMessages.BUYER_KEY_IMMUTABLE);
+        java.util.Map<String, Object> before = audit.snapshot(buyer);
         apply(buyer, request); Buyer saved = buyerRepository.save(buyer);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.BUYER, saved.getId(), AppMessages.buyerUpdatedAudit(saved.getBuyerKey()), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.BUYER, saved.getId(), AppMessages.buyerUpdatedAudit(saved.getBuyerKey()), saved.getBuyerKey(), null, before, saved, null, null);
         return saved;
     }
 
@@ -121,7 +124,7 @@ public class BuyerService {
                 .anyMatch(u -> u.getBuyerPermissions().contains(key));
         if (assigned) throw new IllegalArgumentException(AppMessages.BUYER_ASSIGNED_TO_USERS);
         buyerRepository.delete(buyer);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.BUYER, id, AppMessages.buyerDeletedAudit(key), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.BUYER, id, AppMessages.buyerDeletedAudit(key), key, null, buyer, null, null, null);
     }
 
     public boolean supportsType(String buyerKey, String type) {
@@ -140,11 +143,11 @@ public class BuyerService {
         buyer.setBuyerName(name); buyer.setSlug(slugify(name)); buyer.setActive(request.active() == null || request.active());
         buyer.setSequence(request.sequence() == null ? 0 : Math.max(0, request.sequence())); buyer.setDescription(clean(request.description()));
         if (request.supportedTypes() != null) {
-            if (request.supportedTypes().stream().anyMatch(v -> org.bsl.cartonloading.model.SystemType.normalize(v).isEmpty()))
+            if (request.supportedTypes().stream().anyMatch(v -> SystemType.normalize(v).isEmpty()))
                 throw new IllegalArgumentException("Invalid system type. Use RFID, UNRFID or FACTORY_USE_ONLY.");
             buyer.setSupportedTypes(request.supportedTypes());
         } else if (buyer.getId() == null) {
-            buyer.setSupportedTypes(org.bsl.cartonloading.model.SystemType.legacyBuyerTypes(buyer.getBuyerKey()));
+            buyer.setSupportedTypes(SystemType.legacyBuyerTypes(buyer.getBuyerKey()));
         }
         buyer.setUpdatedAt(LocalDateTime.now()); buyer.setUpdatedBy(RequestActor.current());
     }

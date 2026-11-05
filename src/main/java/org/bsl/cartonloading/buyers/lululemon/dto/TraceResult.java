@@ -5,6 +5,7 @@ import org.bsl.cartonloading.buyers.lululemon.model.CartonItem;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.ScanEvent;
 import org.bsl.cartonloading.buyers.lululemon.model.WeighingResult;
+import org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession;
 
 import java.util.List;
 
@@ -13,5 +14,6 @@ public record TraceResult(
         Carton carton,
         List<CartonItem> items,
         List<ScanEvent> events,
-        List<WeighingResult> weightEvents
+        List<WeighingResult> weightEvents,
+        List<RfidScanSession> rfidSessions
 ) { }

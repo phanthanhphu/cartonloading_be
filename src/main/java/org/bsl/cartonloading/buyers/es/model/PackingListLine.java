@@ -47,9 +47,9 @@ public class PackingListLine {
     private String createdBy;
     private String updatedBy;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
 }

@@ -13,6 +13,7 @@ import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
+import org.bsl.cartonloading.service.SelectedFactoryScope;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -35,6 +36,7 @@ public class WeighingService {
     private final BuyerFactoryAccessService factoryAccess;
     private final AuditLogService auditLogService;
     private final AppSocketPublisher socketPublisher;
+    private final SelectedFactoryScope selectedFactoryScope;
 
     public WeighingService(
             PurchaseOrderRepository poRepository,
@@ -46,7 +48,8 @@ public class WeighingService {
             PackingOrderService orderService,
             BuyerFactoryAccessService factoryAccess,
             AuditLogService auditLogService,
-            AppSocketPublisher socketPublisher
+            AppSocketPublisher socketPublisher,
+            SelectedFactoryScope selectedFactoryScope
     ) {
         this.poRepository = poRepository;
         this.cartonRepository = cartonRepository;
@@ -58,13 +61,16 @@ public class WeighingService {
         this.factoryAccess = factoryAccess;
         this.auditLogService = auditLogService;
         this.socketPublisher = socketPublisher;
+        this.selectedFactoryScope = selectedFactoryScope;
     }
 
     public List<WeighingEligiblePo> eligiblePos(String buyerCode, String orderId) {
         requireOrder(buyerCode, orderId);
         List<WeighingEligiblePo> rows = new ArrayList<>();
+        String activeFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         for (PurchaseOrder po : poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON)) {
-            if (!canAccessFactoryOrUnassigned(po.getFactoryCode())) continue;
+            if (!selectedFactoryScope.matches(activeFactory, po.getFactoryCode())
+                    || !canAccessFactoryOrUnassigned(po.getFactoryCode())) continue;
             List<Carton> cartons = cartonRepository.findByPoIdOrderByCartonNoAsc(po.getId());
             if (cartons.isEmpty()) continue;
             boolean ready = cartons.stream().allMatch(c -> CartonWeightReadiness.isReady(po, c));
@@ -155,6 +161,7 @@ public class WeighingService {
      */
     public List<CartonWeightAssignmentRow> stationAssignments(String buyerCode) {
         requireLululemonBuyer(buyerCode);
+        String activeFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         List<CartonWeightAssignmentRow> rows = new ArrayList<>();
         Map<String, PackingOrder> orderCache = new HashMap<>();
         Map<String, PurchaseOrder> poCache = new HashMap<>();
@@ -167,7 +174,8 @@ public class WeighingService {
             ShippingSchedule schedule = shippingScheduleRepository
                     .findByIdAndOrderIdAndBuyerCode(scheduleId, weighingOrder.getOrderId(), AppConstants.Buyer.LULULEMON)
                     .orElse(null);
-            if (schedule == null || !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) continue;
+            if (schedule == null || !selectedFactoryScope.matches(activeFactory, schedule.getFactoryCode())
+                    || !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) continue;
             if (!isPackingDispatched(weighingOrder)) continue;
             if (!(ShippingScheduleService.SENT_TO_WEIGHT.equals(schedule.getStatus())
                     || ShippingScheduleService.WEIGHING.equals(schedule.getStatus())
@@ -233,7 +241,7 @@ public class WeighingService {
                                 expected, minAllowed, maxAllowed, carton.getActualWeightKg(),
                                 rfidCount, rfidExpected, rfid == null ? 0 : rfid.getReadCount(),
                                 rfid == null ? null : rfid.getReason(),
-                                rfid == null || rfid.getWrongSkuEpcs() == null ? 0 : rfid.getWrongSkuEpcs().size(),
+                                rfid == null ? 0 : RfidScanIssueCounts.wrongSkuIncludingUnsupported(rfid.getWrongSkuEpcs(), rfid.getInvalidReads()),
                                 rfid == null || rfid.getInvalidReads() == null ? 0 : rfid.getInvalidReads().size(),
                                 rfid == null || rfid.getCrossCartonEpcs() == null ? 0 : rfid.getCrossCartonEpcs().size()
                         ));
@@ -316,6 +324,7 @@ public class WeighingService {
     /** Full Carton Weight history list for management/search screens. */
     public List<CartonWeightHistoryRow> stationHistory(String buyerCode) {
         requireLululemonBuyer(buyerCode);
+        String activeFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         Map<String, ShippingSchedule> scheduleCache = new HashMap<>();
         Map<String, PackingOrder> orderCache = new HashMap<>();
         List<CartonWeightHistoryRow> rows = new ArrayList<>();
@@ -326,7 +335,8 @@ public class WeighingService {
             if (scheduleId == null) {
                 if (result.getCartonId() == null) continue;
                 Carton carton = cartonRepository.findById(result.getCartonId()).orElse(null);
-                if (carton == null || !factoryAccess.canAccessAssignedFactory(carton.getFactoryCode())) continue;
+                if (carton == null || !selectedFactoryScope.matches(activeFactory, carton.getFactoryCode())
+                        || !factoryAccess.canAccessAssignedFactory(carton.getFactoryCode())) continue;
                 PackingOrder directOrder;
                 try {
                     directOrder = orderCache.computeIfAbsent(result.getOrderId(), id ->
@@ -341,7 +351,8 @@ public class WeighingService {
             ShippingSchedule schedule = scheduleCache.computeIfAbsent(scheduleKey, key -> shippingScheduleRepository
                     .findByIdAndOrderIdAndBuyerCode(scheduleId, result.getOrderId(), AppConstants.Buyer.LULULEMON)
                     .orElse(null));
-            if (schedule == null || !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) continue;
+            if (schedule == null || !selectedFactoryScope.matches(activeFactory, schedule.getFactoryCode())
+                    || !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) continue;
             PackingOrder order;
             try {
                 order = orderCache.computeIfAbsent(result.getOrderId(), id -> orderService.getEntity(AppConstants.Buyer.LULULEMON, id));
@@ -380,7 +391,7 @@ public class WeighingService {
                 .orElseThrow(() -> new IllegalArgumentException(AppMessages.WEIGHING_PO_NOT_IN_QUEUE));
         if (AppConstants.WeighingSessionStatus.COMPLETED.equals(po.getWeighingSessionStatus())
                 || cartons.stream().allMatch(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())
-                    && "PASS".equals(c.getRfidStatus()))) {
+                    && AppConstants.RfidCheck.PASS.equals(c.getRfidStatus()))) {
             throw new IllegalArgumentException(AppMessages.WEIGHING_SESSION_COMPLETED);
         }
 
@@ -596,7 +607,7 @@ public class WeighingService {
         // This also works when the PO station has been STOPPED but not yet marked COMPLETED.
         // A weight FAILED/PENDING carton is NOT eligible: normal station/weighing checks apply.
         boolean rfidOnlyReview = AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())
-                && !"PASS".equals(carton.getRfidStatus());
+                && !AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus());
         if (!rfidOnlyReview) requireRunningWeighingSession(po);
         WeighingOrder weighingOrder = findWeighingOrderForCarton(orderId, carton.getId());
         return buildLookup(orderId, weighingOrder, carton, rfidOnlyReview);
@@ -949,7 +960,7 @@ public class WeighingService {
         schedule.setRfidReviewStatus(rfidReview);
         // Shipping FINAL is NEVER granted on weight alone, even if a legacy config disables RFID enforcement.
         if (!all.isEmpty() && all.stream().allMatch(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())
-                && "PASS".equals(c.getRfidStatus()))) {
+                && AppConstants.RfidCheck.PASS.equals(c.getRfidStatus()))) {
             LocalDateTime now = LocalDateTime.now();
             schedule.setStatus(ShippingScheduleService.COMPLETED);
             schedule.setCompletedBy(RequestActor.current());
@@ -977,7 +988,7 @@ public class WeighingService {
     /** Compatibility reader for data created before FAILED replaced the old HOLD label. */
     private boolean isFailedWeightStatus(String value) {
         String normalized = clean(value);
-        return AppConstants.WeightStatus.FAILED.equals(normalized) || "HOLD".equals(normalized);
+        return AppConstants.WeightStatus.FAILED.equals(normalized) || AppConstants.WeightStatus.HOLD.equals(normalized);
     }
 
     private String normalizeSscc(String value) {
@@ -998,11 +1009,13 @@ public class WeighingService {
 
     private boolean canAccessFactoryOrUnassigned(String factoryCode) {
         String normalized = normalizeFactory(factoryCode);
-        return normalized == null || factoryAccess.canAccessWeighingFactory(normalized);
+        return selectedFactoryScope.matches(selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON), normalized)
+                && (normalized == null || factoryAccess.canAccessWeighingFactory(normalized));
     }
 
     private void assertFactoryAccessIfPresent(String factoryCode) {
         String normalized = normalizeFactory(factoryCode);
+        selectedFactoryScope.assertMatches(selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON), normalized);
         if (normalized != null) factoryAccess.assertWeighingFactoryAccess(normalized);
     }
 

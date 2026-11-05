@@ -2,16 +2,13 @@ package org.bsl.cartonloading.buyers.es.dto;
 
 import org.bsl.cartonloading.common.constants.AppMessages;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
 
 public record PackingOrderRequest(
-        @NotNull(message = AppMessages.START_ORDER_REQUIRED)
         LocalDate orderDate,
 
-        @NotNull(message = AppMessages.END_ORDER_REQUIRED)
         LocalDate endOrderDate,
 
         @NotBlank(message = AppMessages.ORDER_NAME_REQUIRED)

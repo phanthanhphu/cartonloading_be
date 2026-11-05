@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.controller;
 
+import org.bsl.cartonloading.security.AccessControl;
 import jakarta.validation.Valid;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.dto.admin.FactoryRequest;
@@ -15,19 +16,19 @@ import java.util.List;
 @RequestMapping("/api/factories")
 public class FactoryController {
     private final FactoryCatalogService service;
-    private final org.bsl.cartonloading.security.AccessControl accessControl;
+    private final AccessControl accessControl;
     private final BuyerFactoryAccessService access;
-    public FactoryController(FactoryCatalogService service, org.bsl.cartonloading.security.AccessControl accessControl, BuyerFactoryAccessService access) { this.service = service; this.accessControl = accessControl; this.access = access; }
+    public FactoryController(FactoryCatalogService service, AccessControl accessControl, BuyerFactoryAccessService access) { this.service = service; this.accessControl = accessControl; this.access = access; }
     @GetMapping
     @PreAuthorize("isAuthenticated()")
     public List<Factory> list(@RequestParam(defaultValue = AppConstants.Buyer.LULULEMON) String buyerKey,
                               @RequestParam(defaultValue = "false") boolean includeInactive) {
         // Only Admin may inspect inactive factories.
-        if (!accessControl.canAccessBuyer(buyerKey)) throw new AccessDeniedException("Buyer access denied");
+        if (!accessControl.isAdmin() && !accessControl.canAccessBuyer(buyerKey)) throw new AccessDeniedException("Buyer access denied");
         if (accessControl.isAdmin()) return service.list(buyerKey, includeInactive);
         return service.list(buyerKey, false).stream()
                 .filter(factory -> access.canAccessAssignedFactory(factory.getCode())
-                        || (access.currentUser().canWeightCheck() && access.canAccessWeighingFactory(factory.getCode()))).toList();
+                        || (access.currentUser().canLululemonScanWeight() && access.canAccessWeighingFactory(factory.getCode()))).toList();
     }
     @PostMapping
     @PreAuthorize("@accessControl.isAdmin()")

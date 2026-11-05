@@ -43,6 +43,8 @@ public final class ModbusTcpReader {
                 if (AppConstants.Plc.INT32.equals(encoding)) return (int) value;
                 return value;
             }
+        } catch (IOException error) {
+            throw ModbusReadException.from(error, "Scale PLC");
         }
     }
 }

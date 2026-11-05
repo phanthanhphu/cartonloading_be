@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.config;
 
+import org.bsl.cartonloading.model.CartonProcessingHistory;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.FactoryBarcode;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
@@ -15,7 +16,9 @@ import org.springframework.stereotype.Component;
 public class BuyerKeyBeforeConvertCallback implements BeforeConvertCallback<Object> {
     @Override
     public Object onBeforeConvert(Object entity, String collection) {
-        if (entity instanceof PackingOrder row) row.setBuyerKey(key(row.getBuyerCode()));
+        if (entity instanceof CartonProcessingHistory row)
+            row.setBuyerKey(key(row.getBuyerCode()));
+        else if (entity instanceof PackingOrder row) row.setBuyerKey(key(row.getBuyerCode()));
         else if (entity instanceof PackingListLine row) row.setBuyerKey(key(row.getBuyerCode()));
         else if (entity instanceof PackingAllocationLine row) row.setBuyerKey(key(row.getBuyerCode()));
         else if (entity instanceof CartonScanTransaction row) row.setBuyerKey(key(row.getBuyerCode()));

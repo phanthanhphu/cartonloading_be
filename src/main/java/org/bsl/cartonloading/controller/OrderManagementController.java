@@ -23,7 +23,7 @@ public class OrderManagementController {
     private final OrderManagementService service;
     public OrderManagementController(OrderManagementService service) { this.service = service; }
 
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders")
     public Page<PackingOrderResponse> orders(@RequestParam String buyer,
                                              @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate orderDate,
@@ -35,19 +35,32 @@ public class OrderManagementController {
                                              @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listOrders(buyer, orderDate, orderName, factory, supplier, createdBy, status, page, size);
     }
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    /** Explicit duplicate check on name blur; Save repeats this in Backend. */
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_MANAGE_SALES)
+    @GetMapping("/orders/check-name")
+    public java.util.Map<String, Boolean> checkName(@RequestParam String buyer,
+            @RequestParam String factoryCode, @RequestParam String orderName,
+            @RequestParam(required = false) String excludeOrderId) {
+        return java.util.Map.of("duplicate", service.isOrderNameTaken(buyer, factoryCode, orderName, excludeOrderId));
+    }
+
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{id}")
     public PackingOrderResponse order(@RequestParam String buyer, @PathVariable String id) {
         return service.getOrder(buyer, id);
     }
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_MANAGE_SALES)
     @PostMapping("/orders") public PackingOrderResponse create(@RequestParam String buyer, @Valid @RequestBody PackingOrderRequest request) { return service.createOrder(buyer, request); }
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_MANAGE_SALES)
     @PutMapping("/orders/{id}") public PackingOrderResponse update(@RequestParam String buyer, @PathVariable String id, @Valid @RequestBody PackingOrderRequest request) { return service.updateOrder(buyer, id, request); }
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()")
-    @DeleteMapping("/orders/{id}") public ResponseEntity<Void> delete(@RequestParam String buyer, @PathVariable String id) { service.deleteOrder(buyer, id); return ResponseEntity.noContent().build(); }
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_MANAGE_SALES)
+    @DeleteMapping("/orders/{id}") public ResponseEntity<Void> delete(@RequestParam String buyer, @PathVariable String id,
+            @RequestParam(required = false) String confirmation) {
+        service.deleteOrder(buyer, id, confirmation);
+        return ResponseEntity.noContent().build();
+    }
 
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{orderId}/pos") public Page<PoManagementRow> pos(@RequestParam String buyer, @PathVariable String orderId,
             @RequestParam(required=false) String poNumber, @RequestParam(required=false) String factory,
             @RequestParam(required=false) String style, @RequestParam(required=false) String sku,
@@ -63,19 +76,19 @@ public class OrderManagementController {
             @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listPos(buyer, orderId, poNumber, factory, style, sku, destination, status, exFtyDate, shippingScheduled, inspectionStatus, search, masterPo, description, color, qty, page, size);
     }
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{orderId}/pos/scheduled-inspection-summary")
     public ScheduledPoInspectionSummary scheduledInspectionSummary(@RequestParam String buyer, @PathVariable String orderId) {
         return service.scheduledPoInspectionSummary(buyer, orderId);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{orderId}/pos/{poKey}")
     public PoManagementRow po(@RequestParam String buyer, @PathVariable String orderId, @PathVariable String poKey) {
         return service.getPo(buyer, orderId, poKey);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{orderId}/pos/{poKey}/cartons") public Page<CartonManagementRow> cartons(@RequestParam String buyer,
             @PathVariable String orderId, @PathVariable String poKey,
             @RequestParam(required=false) String cartonNo, @RequestParam(required=false) String sscc,
@@ -83,13 +96,13 @@ public class OrderManagementController {
             @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
         return service.listCartons(buyer, orderId, poKey, cartonNo, sscc, status, page, size);
     }
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{orderId}/cartons/{cartonId}")
     public CartonManagementRow carton(@RequestParam String buyer, @PathVariable String orderId, @PathVariable String cartonId) {
         return service.getCarton(buyer, orderId, cartonId);
     }
 
-    @PreAuthorize("@accessControl.canAccessBuyer(#buyer)")
+    @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{orderId}/cartons/{cartonId}/items") public Page<ItemManagementRow> items(@RequestParam String buyer,
             @PathVariable String orderId, @PathVariable String cartonId,
             @RequestParam(required=false) String itemNo, @RequestParam(required=false) String sku,

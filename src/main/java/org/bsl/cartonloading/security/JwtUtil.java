@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.security;
 
+import org.bsl.cartonloading.model.BuyerAccess;
+import org.bsl.cartonloading.model.SystemType;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
@@ -61,7 +63,7 @@ public class JwtUtil {
     ) {
         String normalizedRole = User.normalizeRole(role);
         List<String> normalizedPermissions = User.normalizeAccessPermissions(accessPermissions, AppConstants.Role.ADMIN.equals(normalizedRole));
-        List<String> normalizedBuyers = org.bsl.cartonloading.model.BuyerAccess.normalizeAll(
+        List<String> normalizedBuyers = BuyerAccess.normalizeAll(
                 buyerPermissions,
                 false
         );
@@ -72,8 +74,8 @@ public class JwtUtil {
                 .claim("tokenVersion", tokenVersion)
                 .claim("accessPermissions", normalizedPermissions)
                 .claim("buyerPermissions", normalizedBuyers)
-                .claim("selectedBuyer", org.bsl.cartonloading.model.BuyerAccess.normalize(selectedBuyer))
-                .claim("selectedType", org.bsl.cartonloading.model.SystemType.normalize(selectedType))
+                .claim("selectedBuyer", BuyerAccess.normalize(selectedBuyer))
+                .claim("selectedType", SystemType.normalize(selectedType))
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
                 .signWith(key, SignatureAlgorithm.HS256)
@@ -152,7 +154,7 @@ public class JwtUtil {
             if (raw instanceof Collection<?> collection) {
                 List<String> values = new ArrayList<>();
                 for (Object value : collection) values.add(String.valueOf(value));
-                return org.bsl.cartonloading.model.BuyerAccess.normalizeAll(values, false);
+                return BuyerAccess.normalizeAll(values, false);
             }
             return List.of();
         } catch (JwtException | IllegalArgumentException exception) {
@@ -161,11 +163,11 @@ public class JwtUtil {
     }
 
     public String getSelectedBuyer(String token) {
-        try { return org.bsl.cartonloading.model.BuyerAccess.normalize(parse(token).getBody().get("selectedBuyer", String.class)); }
+        try { return BuyerAccess.normalize(parse(token).getBody().get("selectedBuyer", String.class)); }
         catch (JwtException | IllegalArgumentException exception) { return ""; }
     }
     public String getSelectedType(String token) {
-        try { return org.bsl.cartonloading.model.SystemType.normalize(parse(token).getBody().get("selectedType", String.class)); }
+        try { return SystemType.normalize(parse(token).getBody().get("selectedType", String.class)); }
         catch (JwtException | IllegalArgumentException exception) { return ""; }
     }
 

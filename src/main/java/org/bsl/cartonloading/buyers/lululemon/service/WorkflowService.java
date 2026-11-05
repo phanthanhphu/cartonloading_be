@@ -1,8 +1,17 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
 import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.model.CartonProcessingHistory;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
+import org.apache.poi.ss.usermodel.DataValidation;
+import org.apache.poi.ss.usermodel.DataValidationConstraint;
+import org.apache.poi.ss.usermodel.DataValidationHelper;
+import org.apache.poi.ss.util.CellRangeAddressList;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.core.io.ClassPathResource;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -14,6 +23,7 @@ import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.ScanEvent;
 import org.bsl.cartonloading.buyers.lululemon.model.ShippingSchedule;
 import org.bsl.cartonloading.buyers.lululemon.model.WeighingResult;
+import org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonItemRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
@@ -26,6 +36,7 @@ import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
 import org.bsl.cartonloading.service.RequestActor;
 import org.bsl.cartonloading.service.FactoryCatalogService;
+import org.bsl.cartonloading.service.SelectedFactoryScope;
 import org.bsl.cartonloading.common.importing.ExcelImportSupport;
 import org.bsl.cartonloading.common.importing.TextNormalizer;
 import org.springframework.data.domain.Page;
@@ -64,6 +75,9 @@ public class WorkflowService {
     private final AuditLogService auditLogService;
     private final AppSocketPublisher socketPublisher;
     private final FactoryCatalogService factories;
+    private final SelectedFactoryScope selectedFactoryScope;
+    private final PoIdentityRegistryService identityRegistry;
+    private final LululemonHistoryProjectionService historyProjection;
 
     public WorkflowService(
             PurchaseOrderRepository poRepository,
@@ -77,7 +91,10 @@ public class WorkflowService {
             MongoTemplate mongoTemplate,
             AuditLogService auditLogService,
             AppSocketPublisher socketPublisher,
-            FactoryCatalogService factories
+            FactoryCatalogService factories,
+            SelectedFactoryScope selectedFactoryScope,
+            PoIdentityRegistryService identityRegistry,
+            LululemonHistoryProjectionService historyProjection
     ) {
         this.poRepository = poRepository;
         this.cartonRepository = cartonRepository;
@@ -91,19 +108,472 @@ public class WorkflowService {
         this.auditLogService = auditLogService;
         this.socketPublisher = socketPublisher;
         this.factories = factories;
+        this.selectedFactoryScope = selectedFactoryScope;
+        this.identityRegistry = identityRegistry;
+        this.historyProjection = historyProjection;
+    }
+
+    // Lululemon Excel ACTION workflow. Only the service layer owns buyer-specific behavior.
+    private static final String EXCEL_ACTION_HEADER = AppConstants.ExcelAction.ACTION_COLUMN;
+    private static final String EXCEL_ROW_ID_HEADER = AppConstants.ExcelAction.ID_COLUMN;
+    private static final String EXCEL_PO_ID = AppConstants.ExcelAction.PO_ID_COLUMN;
+    private static final String EXCEL_SOURCE_ROW = AppConstants.ExcelAction.SOURCE_ROW_COLUMN;
+    private static final String EXCEL_DATA_VERSION = AppConstants.ExcelAction.DATA_VERSION_COLUMN;
+    private static final int MAX_ACTION_ROWS = AppConstants.ExcelAction.MAX_ACTION_ROWS;
+    private static boolean isExcelActionMeta(String header) {
+        return Set.of(EXCEL_ACTION_HEADER, EXCEL_ROW_ID_HEADER, EXCEL_PO_ID, EXCEL_SOURCE_ROW, EXCEL_DATA_VERSION)
+                .contains(Objects.toString(header, "").trim().toUpperCase(Locale.ROOT));
+    }
+    private String version(PurchaseOrder po) {
+        return po.getUpdatedAt() == null ? "" : po.getUpdatedAt().toString();
+    }
+
+    /** Output-only layout: A=hidden ID, B=ACTION, then 29 current business columns. */
+    private void prependExcelItemId(XSSFWorkbook wb) {
+        org.apache.poi.xssf.usermodel.XSSFSheet sheet = wb.getSheet(AppConstants.Excel.ALL_BP_SHEET);
+        if (sheet == null) throw new IllegalStateException("Lululemon template sheet is missing");
+        Row header = sheet.getRow(1);
+        if (header == null || !EXCEL_ACTION_HEADER.equalsIgnoreCase(
+                Objects.toString(header.getCell(0).getStringCellValue(), "").trim())) {
+            throw new IllegalStateException("Expected official ACTION template header in A2");
+        }
+        sheet.shiftColumns(0, AppConstants.AllBp.TEMPLATE_BUSINESS_COLUMN_COUNT, 1);
+        Row shifted = sheet.getRow(1);
+        org.apache.poi.ss.usermodel.Cell idCell = shifted.createCell(0);
+        idCell.setCellValue(EXCEL_ROW_ID_HEADER);
+        if (shifted.getCell(1) != null) idCell.setCellStyle(shifted.getCell(1).getCellStyle());
+        sheet.setColumnWidth(0, 35 * 256);
+        // Keep the item-level ID for UPDATE/DELETE, but hide the technical column in Excel.
+        sheet.setColumnHidden(0, true);
+    }
+
+    private String exportItemId(PurchaseOrder po, int sourceIndex) {
+        return po.getId() + "@" + (sourceIndex + 1) + "@" +
+                (version(po).isEmpty() ? "LEGACY" : version(po));
+    }
+
+    private void restrictExcelActionChoices(XSSFWorkbook wb, String... choices) {
+        org.apache.poi.xssf.usermodel.XSSFSheet sheet = wb.getSheet(AppConstants.Excel.ALL_BP_SHEET);
+        if (sheet == null) throw new IllegalStateException("Lululemon template sheet is missing");
+        // Replace the old CREATE/UPDATE/DELETE dropdown with CREATE-only.
+        if (sheet.getCTWorksheet().isSetDataValidations()) {
+            sheet.getCTWorksheet().unsetDataValidations();
+        }
+        DataValidationHelper helper = sheet.getDataValidationHelper();
+        DataValidationConstraint constraint = helper.createExplicitListConstraint(choices);
+        DataValidation validation = helper.createValidation(constraint,
+                new CellRangeAddressList(2, MAX_ACTION_ROWS + 1, 1, 1));
+        validation.setShowErrorBox(true);
+        sheet.addValidationData(validation);
+    }
+
+    public byte[] downloadExcelTemplate(String buyerCode, String orderId) {
+        requireOrder(buyerCode, orderId);
+        try (var input = new ClassPathResource("templates/Lululemon_PO_Import_Template.xlsx").getInputStream();
+             XSSFWorkbook wb = new XSSFWorkbook(input);
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            prependExcelItemId(wb);
+            restrictExcelActionChoices(wb, AppConstants.ExcelAction.CREATE);
+            wb.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException("Lululemon template not available", e);
+        }
+    }
+
+    /**
+     * Export existing source rows ON TOP OF the official Lululemon template, rather
+     * than building a new workbook from historical/imported header labels.
+     * All 29 current business headers and their positions come from the
+     * downloadable template. Historical FOB/label columns are not re-exported. This is a REFERENCE export, not an update workbook;
+     * existing PO changes must be made through the PO management UI.
+     */
+    public byte[] exportActionExcel(String buyerCode, String orderId) {
+        PackingOrder order = requireOrder(buyerCode, orderId);
+        String selected = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
+        String factory = normalizeFactory(order.getFactoryCode());
+        selectedFactoryScope.assertMatches(selected, factory);
+        factoryAccess.assertAssignedFactoryAccess(factory);
+        List<PurchaseOrder> pos = poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(
+                orderId, AppConstants.Buyer.LULULEMON);
+
+        // Open the same template used by the Download Template endpoint so the
+        // exported file retains column order, formatting and ACTION validation.
+        try (var input = new ClassPathResource("templates/Lululemon_PO_Import_Template.xlsx").getInputStream();
+             XSSFWorkbook wb = new XSSFWorkbook(input);
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            prependExcelItemId(wb);
+            Sheet sheet = wb.getSheet(AppConstants.Excel.ALL_BP_SHEET);
+            if (sheet == null) throw new IllegalStateException("Lululemon template sheet is missing");
+            Row header = sheet.getRow(1);
+            FormulaEvaluator evaluator = excelSupport.evaluator(wb);
+            if (!EXCEL_ROW_ID_HEADER.equalsIgnoreCase(excelSupport.text(header, 0, evaluator))
+                    || !EXCEL_ACTION_HEADER.equalsIgnoreCase(excelSupport.text(header, 1, evaluator))) {
+                throw new IllegalStateException("Lululemon template must have ID in A2 and ACTION in B2");
+            }
+            final int businessEnd = header.getLastCellNum(); // ID + ACTION + 29 business columns
+            if (businessEnd != AppConstants.AllBp.TEMPLATE_BUSINESS_COLUMN_COUNT + 2)
+                throw new IllegalStateException("Lululemon template must have "
+                        + AppConstants.AllBp.TEMPLATE_BUSINESS_COLUMN_COUNT + " business columns");
+            List<String> businessHeaders = new ArrayList<>();
+            Set<String> uniqueHeaders = new HashSet<>();
+            for (int c = 2; c < businessEnd; c++) {
+                String name = Objects.toString(excelSupport.text(header, c, evaluator), "").trim();
+                if (name.isEmpty() || !uniqueHeaders.add(sourceHeaderIdentity(name)))
+                    throw new IllegalStateException("Invalid or duplicate Lululemon template column at index " + c);
+                businessHeaders.add(name);
+            }
+            // Exported data must not masquerade as new CREATE rows.
+            restrictExcelActionChoices(wb, AppConstants.ExcelAction.CREATE, AppConstants.ExcelAction.UPDATE, AppConstants.ExcelAction.DELETE);
+            // The example body from the template is NOT actual Order data; clear
+            // all template data values while preserving the prepared cell styles.
+            for (int r = 2; r <= sheet.getLastRowNum(); r++) {
+                Row templateRow = sheet.getRow(r);
+                if (templateRow == null) continue;
+                for (int c = 0; c < businessEnd; c++) {
+                    org.apache.poi.ss.usermodel.Cell cell = templateRow.getCell(c);
+                    if (cell != null) cell.setBlank();
+                }
+            }
+            Row styleRow = sheet.getRow(2);
+            int rowIndex = 2;
+            for (PurchaseOrder po : pos) {
+                if (!Objects.equals(factory, normalizeFactory(po.getFactoryCode()))) continue;
+                List<Map<String, String>> rows = po.getAllBpRows();
+                if (rows == null || rows.isEmpty()) continue;
+                for (int i = 0; i < rows.size(); i++) {
+                    if (rowIndex - 2 >= MAX_ACTION_ROWS) throw new IllegalArgumentException(
+                            "Export exceeds 15,000 Excel rows. Export a smaller Order.");
+                    Row dst = sheet.getRow(rowIndex);
+                    if (dst == null) dst = sheet.createRow(rowIndex);
+                    // Reuse the template's example-row styles for data beyond its
+                    // original preformatted area without copying placeholder data.
+                    org.apache.poi.ss.usermodel.Cell actionCell = dst.getCell(0);
+                    if (actionCell == null) actionCell = dst.createCell(0);
+                    actionCell.setCellValue(exportItemId(po, i));
+                    org.apache.poi.ss.usermodel.Cell typeCell = dst.getCell(1);
+                    if (typeCell == null) typeCell = dst.createCell(1);
+                    typeCell.setCellValue(AppConstants.ExcelAction.UPDATE);
+                    Map<String, String> source = rows.get(i);
+                    for (int c = 2; c < businessEnd; c++) {
+                        org.apache.poi.ss.usermodel.Cell cell = dst.getCell(c);
+                        if (cell == null) cell = dst.createCell(c);
+                        if (styleRow != null && cell.getCellStyle().getIndex() == 0) {
+                            org.apache.poi.ss.usermodel.Cell styleCell = styleRow.getCell(c);
+                            if (styleCell != null) cell.setCellStyle(styleCell.getCellStyle());
+                        }
+                        cell.setCellValue(sourceDisplayValue(source, businessHeaders.get(c - 2)));
+                    }
+                    rowIndex++;
+                }
+            }
+
+            if (rowIndex > 2) sheet.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(
+                    1, rowIndex - 1, 0, businessEnd - 1));
+            wb.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to export Lululemon Excel from the official template", e);
+        }
+    }
+
+    public record ExcelActionPreview(int creates, int updates, int deletes, List<String> warnings) { }
+    public record ExcelActionResult(int createdPos, int createdItems, int updatedPos, int deletedRows, List<String> warnings) { }
+    private record ExcelRowAction(int excelRow, String action, String id, Map<String,String> raw) { }
+    private record EditPlan(String poId, String expectedVersion, Map<Integer,ExcelRowAction> rowActions,
+                            List<ExcelRowAction> additions) { }
+    private record ActionPlan(Set<Integer> createLines, List<EditPlan> edits,
+                              int creates, int updates, int deletes, List<String> warnings) { }
+
+    public ExcelActionPreview previewActionExcel(String buyerCode, String orderId, MultipartFile file, String mode) {
+        ActionPlan plan = readActionPlan(buyerCode, orderId, file, mode);
+        return new ExcelActionPreview(plan.creates(), plan.updates(), plan.deletes(), plan.warnings());
+    }
+
+    public synchronized ExcelActionResult applyActionExcel(String buyerCode, String orderId, MultipartFile file, String mode) {
+        ActionPlan plan = readActionPlan(buyerCode, orderId, file, mode); // Re-validate under the writer lock.
+        int createdPos = 0;
+        // EDIT supports brand new POs too; existing-PO additions are handled as row-level edits.
+        if (!plan.createLines().isEmpty()) {
+            createdPos = importAllBpInternal(buyerCode, orderId, file, false, false, plan.createLines()).getCreatedPos();
+        }
+        int edited = 0;
+        int deleted = 0;
+        for (EditPlan change : plan.edits()) {
+            PurchaseOrder po = requirePo(orderId, change.poId());
+            if (!Objects.equals(version(po).isEmpty() ? "LEGACY" : version(po), change.expectedVersion()))
+                throw new IllegalArgumentException("PO data changed after export. Download Edit Excel again.");
+            List<Map<String,String>> source = po.getAllBpRows();
+            List<Map<String,String>> finalRows = new ArrayList<>();
+            for (int i = 0; i < source.size(); i++) {
+                ExcelRowAction action = change.rowActions().get(i);
+                if (action != null && AppConstants.ExcelAction.DELETE.equals(action.action())) {
+                    deleted++;
+                    continue;
+                }
+                if (action != null && AppConstants.ExcelAction.UPDATE.equals(action.action())) {
+                    finalRows.add(mergeExcelSourceRow(source.get(i), action.raw()));
+                    edited++;
+                } else finalRows.add(new LinkedHashMap<>(source.get(i)));
+            }
+            for (ExcelRowAction addition : change.additions()) finalRows.add(addition.raw());
+            if (finalRows.isEmpty()) {
+                deleteImportedPo(buyerCode, orderId, po.getId());
+            } else {
+                updateImportedPoInternal(buyerCode, orderId, po.getId(), excelUpdateRequest(po, finalRows), true);
+            }
+        }
+        return new ExcelActionResult(createdPos, plan.creates(), edited, deleted,
+                List.of("Excel actions applied. Download Edit Excel again before the next update."));
+    }
+
+    /**
+     * NEW: the original 29-column Lululemon Sales Excel needs neither ID nor ACTION;
+     * every populated PO row is CREATE. Older CREATE-only ACTION workbooks are also
+     * accepted, but UPDATE/DELETE are never allowed in NEW mode.
+     * EDIT: the legacy API still requires an exported ID and explicit ACTION.
+     */
+    private ActionPlan readActionPlan(String buyerCode, String orderId, MultipartFile file, String mode) {
+        PackingOrder order = requireOrder(buyerCode, orderId);
+        String selected = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
+        String factory = normalizeFactory(order.getFactoryCode());
+        selectedFactoryScope.assertMatches(selected, factory);
+        factoryAccess.assertAssignedFactoryAccess(factory);
+        boolean editMode = AppConstants.ExcelAction.EDIT_MODE.equalsIgnoreCase(mode);
+        if (!editMode && !AppConstants.ExcelAction.NEW_MODE.equalsIgnoreCase(mode))
+            throw new IllegalArgumentException("Invalid upload mode. Select Upload New Excel or Upload Edited Excel.");
+        Set<Integer> newPoLines = new LinkedHashSet<>();
+        Set<String> seenKeys = new HashSet<>();
+        Set<String> seenRowIds = new HashSet<>();
+        List<PoIdentityRegistryService.Input> newIds = new ArrayList<>();
+        Map<String,PurchaseOrder> existingByKey = new LinkedHashMap<>();
+        Map<String,PurchaseOrder> existingById = new HashMap<>();
+        Map<String, Map<Integer,ExcelRowAction>> rowChanges = new LinkedHashMap<>();
+        Map<String, List<ExcelRowAction>> rowAdditions = new LinkedHashMap<>();
+        Map<String,String> versions = new LinkedHashMap<>();
+        Map<String,PurchaseOrder> affected = new LinkedHashMap<>();
+        int createCount = 0, updateCount = 0, deleteCount = 0;
+        try (Workbook workbook = excelSupport.openWorkbook(file)) {
+            Sheet sheet = excelSupport.requiredSheet(workbook, AppConstants.Excel.ALL_BP_SHEET);
+            FormulaEvaluator eval = excelSupport.evaluator(workbook);
+            int headerIndex = findHeaderRow(sheet, eval);
+            Row header = sheet.getRow(headerIndex);
+            Map<String,Integer> columns = resolveAllBpColumns(header, eval);
+            int poCol = requiredCanonicalColumn(columns, AppConstants.AllBpKey.PO);
+            requiredCanonicalColumn(columns, AppConstants.AllBpKey.MASTER_PO);
+            requiredCanonicalColumn(columns, AppConstants.AllBpKey.PACKING_PLAN);
+            requiredCanonicalColumn(columns, AppConstants.AllBpKey.SALES_ORDER_PTS);
+            Integer actionCol = null, idCol = null;
+            for (int c = 0; c < header.getLastCellNum(); c++) {
+                String h = clean(excelSupport.text(header, c, eval));
+                if (EXCEL_ACTION_HEADER.equalsIgnoreCase(h)) actionCol = c;
+                if (EXCEL_ROW_ID_HEADER.equalsIgnoreCase(h)) idCol = c;
+            }
+            // No ACTION column is the standard Sales file layout in NEW mode.
+            // Do not allow an ID-only workbook to bypass the CREATE-only contract.
+            if (actionCol == null) {
+                if (editMode)
+                    throw new IllegalArgumentException("Upload Edited Excel requires ACTION and an exported item ID.");
+                if (idCol != null)
+                    throw new IllegalArgumentException("Upload New Excel accepts business columns only, without ID; "
+                            + "or a legacy template with ACTION=CREATE and blank ID.");
+            } else {
+                if (!((actionCol == 0 && idCol == null) || (actionCol == 1 && Objects.equals(idCol, 0))))
+                    throw new IllegalArgumentException("Invalid Excel layout: ACTION must be in column A "
+                            + "(or column B when ID is in A).");
+            }
+            if (editMode && idCol == null)
+                throw new IllegalArgumentException("Upload Edited Excel requires the ID column. Download Edit Excel first.");
+            List<SourceColumn> businessColumns = sourceColumns(header, eval);
+            if (editMode) for (PurchaseOrder po : poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(
+                    orderId, AppConstants.Buyer.LULULEMON)) {
+                if (Objects.equals(factory, normalizeFactory(po.getFactoryCode()))) {
+                    existingById.put(po.getId(), po);
+                    existingByKey.put(PoIdentityRegistryService.identityId(AppConstants.Buyer.LULULEMON,
+                            po.getMasterPo(), po.getPoNumber(), po.getPackingPlan(), po.getSalesOrderPts()), po);
+                }
+            }
+            for (int r = headerIndex + 1; r <= sheet.getLastRowNum(); r++) {
+                Row row = sheet.getRow(r);
+                if (row == null) continue;
+                String poNumber = clean(excelSupport.text(row, poCol, eval));
+                String explicitAction = actionCol == null ? null : clean(excelSupport.text(row, actionCol, eval));
+                String id = idCol == null ? null : clean(excelSupport.text(row, idCol, eval));
+                if (poNumber == null && explicitAction == null && id == null) continue;
+                if (poNumber == null) throw new IllegalArgumentException(
+                        "Excel row " + (r + 1) + " requires a PO number.");
+                if (actionCol != null && explicitAction == null)
+                    throw new IllegalArgumentException("Excel row " + (r + 1)
+                            + " has a blank ACTION; remove the ACTION column for new files, "
+                            + "or explicitly set CREATE.");
+                String action = actionCol == null ? AppConstants.ExcelAction.CREATE
+                        : explicitAction.toUpperCase(Locale.ROOT);
+                if (!Set.of(AppConstants.ExcelAction.CREATE, AppConstants.ExcelAction.UPDATE,
+                        AppConstants.ExcelAction.DELETE).contains(action))
+                    throw new IllegalArgumentException("Excel row " + (r + 1) + " has invalid ACTION " + action);
+                if (!editMode && !AppConstants.ExcelAction.CREATE.equals(action))
+                    throw new IllegalArgumentException("Upload New Excel accepts CREATE only (row " + (r + 1) + ").");
+                String master = canonicalValue(row, columns, eval, AppConstants.AllBpKey.MASTER_PO);
+                String plan = canonicalValue(row, columns, eval, AppConstants.AllBpKey.PACKING_PLAN);
+                String so = canonicalValue(row, columns, eval, AppConstants.AllBpKey.SALES_ORDER_PTS);
+                String incomingFactory = canonicalValue(row, columns, eval, "FACTORY");
+                if (incomingFactory != null && !factory.equals(normalizeFactory(incomingFactory)))
+                    throw new IllegalArgumentException("Excel row " + (r + 1) + " belongs to another Factory.");
+                Map<String,String> raw = captureAllBpRow(row, businessColumns, eval);
+                String key = PoIdentityRegistryService.identityId(AppConstants.Buyer.LULULEMON,
+                        master, poNumber, plan, so);
+                if (AppConstants.ExcelAction.CREATE.equals(action)) {
+                    if (id != null) throw new IllegalArgumentException("CREATE must have a blank ID (row " + (r + 1) + ").");
+                    PurchaseOrder samePo = editMode ? existingByKey.get(key) : null;
+                    if (samePo != null) {
+                        rowAdditions.computeIfAbsent(samePo.getId(), k -> new ArrayList<>())
+                                .add(new ExcelRowAction(r + 1, action, null, raw));
+                        affected.put(samePo.getId(), samePo);
+                        versions.putIfAbsent(samePo.getId(), version(samePo).isEmpty() ? "LEGACY" : version(samePo));
+                    } else {
+                        if (!seenKeys.add(key)) throw new IllegalArgumentException(
+                                "Duplicate new PO identity in Excel at row " + (r + 1));
+                        newPoLines.add(r + 1);
+                        newIds.add(new PoIdentityRegistryService.Input(master, poNumber, plan, so, factory, orderId));
+                    }
+                    createCount++;
+                } else {
+                    if (id == null || !editMode) throw new IllegalArgumentException(
+                            "UPDATE/DELETE requires an exported item ID (row " + (r + 1) + ").");
+                    if (!seenRowIds.add(id)) throw new IllegalArgumentException("Repeated item ID in Excel: row " + (r + 1));
+                    String[] bits = id.split("@", 3);
+                    if (bits.length != 3) throw new IllegalArgumentException("Invalid item ID at row " + (r + 1));
+                    int index;
+                    try { index = Integer.parseInt(bits[1]) - 1; }
+                    catch (NumberFormatException ex) { throw new IllegalArgumentException("Invalid item ID at row " + (r + 1)); }
+                    PurchaseOrder po = existingById.get(bits[0]);
+                    if (po == null) throw new IllegalArgumentException(
+                            "Item no longer exists in this Buyer/Order/Factory, row " + (r + 1));
+                    assertFactoryAccessIfPresent(po.getFactoryCode());
+                    if (!Objects.equals(factory, normalizeFactory(po.getFactoryCode())))
+                        throw new IllegalArgumentException("Item belongs to another Factory, row " + (r + 1));
+                    if (!Objects.equals(bits[2], version(po).isEmpty() ? "LEGACY" : version(po)))
+                        throw new IllegalArgumentException("Excel data changed since download (row " + (r + 1)
+                                + "). Download Edit Excel again.");
+                    if (index < 0 || po.getAllBpRows() == null || index >= po.getAllBpRows().size())
+                        throw new IllegalArgumentException("Source item not found at row " + (r + 1));
+                    String actualKey = PoIdentityRegistryService.identityId(AppConstants.Buyer.LULULEMON,
+                            po.getMasterPo(), po.getPoNumber(), po.getPackingPlan(), po.getSalesOrderPts());
+                    if (!actualKey.equals(key)) throw new IllegalArgumentException(
+                            "PO identity columns cannot be changed in UPDATE/DELETE (row " + (r + 1) + ").");
+                    // A re-upload of the unchanged export must not rewrite PO/carton data.
+                    boolean rowChanged = !AppConstants.ExcelAction.UPDATE.equals(action)
+                            || hasExcelRowChange(po.getAllBpRows().get(index), raw);
+                    if (rowChanged) {
+                        Map<Integer,ExcelRowAction> changes = rowChanges.computeIfAbsent(po.getId(), k -> new LinkedHashMap<>());
+                        if (changes.putIfAbsent(index, new ExcelRowAction(r + 1, action, id, raw)) != null)
+                            throw new IllegalArgumentException("Same source item occurs twice in file: " + id);
+                        affected.put(po.getId(), po);
+                        versions.put(po.getId(), bits[2]);
+                        if (AppConstants.ExcelAction.UPDATE.equals(action)) updateCount++;
+                        else deleteCount++;
+                    }
+                }
+                if (createCount + updateCount + deleteCount > MAX_ACTION_ROWS)
+                    throw new IllegalArgumentException("Excel exceeds " + MAX_ACTION_ROWS + " rows");
+            }
+            identityRegistry.preflight(newIds, null);
+            List<EditPlan> edits = new ArrayList<>();
+            for (PurchaseOrder po : affected.values()) {
+                Map<Integer,ExcelRowAction> changes = rowChanges.getOrDefault(po.getId(), Map.of());
+                List<ExcelRowAction> adds = rowAdditions.getOrDefault(po.getId(), List.of());
+                // Build final source in original order so row-number shifts never target a different item.
+                List<Map<String,String>> finalRows = new ArrayList<>();
+                for (int i = 0; i < po.getAllBpRows().size(); i++) {
+                    ExcelRowAction act = changes.get(i);
+                    if (act != null && AppConstants.ExcelAction.DELETE.equals(act.action())) continue;
+                    finalRows.add(act != null ? mergeExcelSourceRow(po.getAllBpRows().get(i), act.raw())
+                            : new LinkedHashMap<>(po.getAllBpRows().get(i)));
+                }
+                for (ExcelRowAction add : adds) finalRows.add(add.raw());
+                if (!finalRows.isEmpty()) {
+                    PoUpdateRequest request = excelUpdateRequest(po, finalRows);
+                    buildEditedAllBpPlan(po, request, true); // Validate BEFORE any write.
+                    // Do not permit source row removal after operations have started.
+                    if (changes.values().stream().anyMatch(a -> AppConstants.ExcelAction.DELETE.equals(a.action()))) {
+                        if (clean(po.getPickedBy()) != null || po.getPlannedShippingDate() != null
+                                || hasPoOperationalActivity(po) || isAssignedToAnySchedule(po))
+                            throw new IllegalArgumentException("Cannot DELETE items from PO " + po.getPoNumber()
+                                    + " after picking/packing/shipping has started.");
+                    }
+                } else {
+                    if (po.getPlannedShippingDate() != null || clean(po.getPickedBy()) != null)
+                        throw new IllegalArgumentException("Cannot delete picked/shipping PO " + po.getPoNumber());
+                    assertPoWeighingNotCompleted(po);
+                    assertImportedPoMutable(po);
+                    assertPoNotAssignedToOpenSchedule(po);
+                }
+                edits.add(new EditPlan(po.getId(), versions.get(po.getId()), changes, adds));
+            }
+            return new ActionPlan(newPoLines, edits, createCount, updateCount, deleteCount,
+                    List.of(editMode ? "Changes are validated against exported item IDs and Factory permissions."
+                            : "All PO rows are treated as CREATE. Existing PO identities are blocked."));
+        } catch (PoImportConflictException | IllegalArgumentException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Unable to validate Lululemon Excel: " + cleanMessage(ex), ex);
+        }
+    }
+
+    private PoUpdateRequest excelUpdateRequest(PurchaseOrder po, List<Map<String,String>> rows) {
+        return new PoUpdateRequest(po.getPoNumber(), po.getMasterPo(), po.getFactoryCode(), po.getStyleNumber(),
+                po.getDescription(), po.getColor(), po.getSize(), po.getTotalQty(), po.getQtyPerCarton(),
+                po.getDcCode(), po.getDestination(), po.getChannel(), po.getPackingPlan(), po.getSalesOrderPts(),
+                po.getShipMode(), po.getSeason(), po.getFwd(), po.getCartonBoxSize(), po.getNetWeightKg(),
+                po.getGrossWeightKg(), po.getExFtyDate(), rows);
+    }
+
+    private String sourceHeaderIdentity(String label) {
+        String canonical = canonicalAllBpKey(label);
+        return canonical != null ? "CANON:" + canonical : "RAW:" + TextNormalizer.headerKey(label);
+    }
+    private String sourceDisplayValue(Map<String,String> source, String exportedHeader) {
+        if (source == null) return "";
+        if (source.containsKey(exportedHeader)) return Objects.toString(source.get(exportedHeader), "");
+        String key = sourceHeaderIdentity(exportedHeader);
+        for (var entry : source.entrySet()) if (key.equals(sourceHeaderIdentity(entry.getKey())))
+            return Objects.toString(entry.getValue(), "");
+        return "";
+    }
+    private Map<String,String> mergeExcelSourceRow(Map<String,String> original, Map<String,String> incoming) {
+        Map<String,String> result = new LinkedHashMap<>(original);
+        for (var change : incoming.entrySet()) {
+            String identity = sourceHeaderIdentity(change.getKey());
+            String matched = result.keySet().stream().filter(h -> identity.equals(sourceHeaderIdentity(h))).findFirst().orElse(null);
+            if (matched != null) result.put(matched, change.getValue());
+        }
+        return result;
+    }
+
+    private boolean hasExcelRowChange(Map<String,String> saved, Map<String,String> incoming) {
+        for (var entry : incoming.entrySet()) {
+            String canonical = canonicalAllBpKey(entry.getKey());
+            if (canonical != null && AppConstants.AllBp.FORMULA_KEYS.contains(canonical)) continue;
+            if (saved == null || saved.keySet().stream().noneMatch(h -> sourceHeaderIdentity(h).equals(sourceHeaderIdentity(entry.getKey())))) continue;
+            String oldValue = clean(sourceDisplayValue(saved, entry.getKey()));
+            String newValue = clean(entry.getValue());
+            if (!Objects.equals(oldValue, newValue)) return true;
+        }
+        return false;
     }
 
     public ImportResult importAllBp(String buyerCode, String orderId, MultipartFile file, boolean replace) {
-        return importAllBpInternal(buyerCode, orderId, file, replace, false);
+        // Uploads are append-only. Ignore the old replace flag to avoid destructive/blocked reimports.
+        return importAllBpInternal(buyerCode, orderId, file, false, false, null);
     }
 
     /** Sales master file: add only new Master PO + PO pairs; never overwrite an existing pair. */
     public ImportResult importSharedAllBp(String buyerCode, String orderId, MultipartFile file) {
-        return importAllBpInternal(buyerCode, orderId, file, false, true);
+        return importAllBpInternal(buyerCode, orderId, file, false, true, null);
     }
 
     private synchronized ImportResult importAllBpInternal(String buyerCode, String orderId, MultipartFile file,
-                                                           boolean replace, boolean sharedImport) {
+                                                           boolean replace, boolean sharedImport, Set<Integer> onlySourceRows) {
         PackingOrder order = requireOrder(buyerCode, orderId);
         if (order.getFactoryCode() == null || order.getFactoryCode().isBlank())
             throw new IllegalArgumentException("Classify legacy Order Factory before ALL_BP import.");
@@ -117,6 +587,28 @@ public class WorkflowService {
             int headerRowIndex = findHeaderRow(sheet, evaluator);
             Row header = sheet.getRow(headerRowIndex);
             Map<String, Integer> columns = resolveAllBpColumns(header, evaluator);
+            // Legacy import accepts a normal business-column workbook with no ACTION or ID.
+            // Older CREATE-only ACTION workbooks remain supported for compatibility.
+            int actionCol = -1;
+            int idCol = -1;
+            for (int c = 0; c < header.getLastCellNum(); c++) {
+                String h = Objects.toString(excelSupport.text(header, c, evaluator), "").trim();
+                if (EXCEL_ACTION_HEADER.equalsIgnoreCase(h)) actionCol = c;
+                if (EXCEL_ROW_ID_HEADER.equalsIgnoreCase(h)) idCol = c;
+            }
+            if (actionCol >= 0 && !((actionCol == 0 && idCol < 0) || (actionCol == 1 && idCol == 0)))
+                throw new IllegalArgumentException("ACTION must be A, or B when ID is column A.");
+            if (actionCol >= 0) for (int r = headerRowIndex + 1; r <= sheet.getLastRowNum(); r++) {
+                if (onlySourceRows != null && !onlySourceRows.contains(r + 1)) continue;
+                Row sourceRow = sheet.getRow(r);
+                if (sourceRow == null) continue;
+                String po = clean(excelSupport.text(sourceRow, columns.get(AppConstants.AllBpKey.PO), evaluator));
+                if (po == null) continue;
+                String actionText = clean(excelSupport.text(sourceRow, actionCol, evaluator));
+                String idText = idCol < 0 ? null : clean(excelSupport.text(sourceRow, idCol, evaluator));
+                if (!AppConstants.ExcelAction.CREATE.equalsIgnoreCase(actionText) || idText != null)
+                    throw new IllegalArgumentException("Excel row " + (r + 1) + ": new imports require ACTION=CREATE and blank ID.");
+            }
             List<SourceColumn> sourceColumns = sourceColumns(header, evaluator);
             sourceHeaderLabels = sourceColumns.stream().map(SourceColumn::label).toList();
 
@@ -137,6 +629,7 @@ public class WorkflowService {
             // irrespective of Style, Destination, Qty or other ALL_BP fields.
             Map<AllBpPoFourKeyGuard.Key, Integer> seenPoKeys = new LinkedHashMap<>();
             for (int rowIndex = headerRowIndex + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                if (onlySourceRows != null && !onlySourceRows.contains(rowIndex + 1)) continue;
                 Row row = sheet.getRow(rowIndex);
                 if (row == null) continue;
                 String poNumber = clean(excelSupport.text(row, poCol, evaluator));
@@ -205,12 +698,19 @@ public class WorkflowService {
         // Preflight the complete file BEFORE any update/save. This includes Sales Shared
         // Import: an existing four-column identity is not a new PO, even if
         // other ALL_BP fields differ. The check happens before any database write.
-        List<PurchaseOrder> savedPos = poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(
-                orderId, AppConstants.Buyer.LULULEMON);
-        AllBpPoFourKeyGuard.checkAgainstSaved(savedPos, parsed.stream()
-                .map(po -> AllBpPoFourKeyGuard.key(po.masterPo(), po.poNumber(),
-                        po.packingPlan(), po.salesOrderPts()))
-                .collect(Collectors.toSet()));
+        // The indexed buyer-wide registry preflight below replaces the legacy
+        // full-Order PO scan for append-only uploads (important for large data).
+        List<PurchaseOrder> savedPos = replace && !sharedImport
+                ? poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON)
+                : List.of();
+        // Buyer-wide preflight detects ownership in any Order / Factory, including
+        // historical POs created before the registry was introduced.
+        List<PoIdentityRegistryService.Input> identities = parsed.stream()
+                .map(po -> new PoIdentityRegistryService.Input(po.masterPo(), po.poNumber(),
+                        po.packingPlan(), po.salesOrderPts(), po.factoryCode(), orderId))
+                .toList();
+        identityRegistry.preflight(identities, null);
+
         // Both upload entry points may append new four-key identities to an
         // existing Order. Prior POs are never replaced by a regular upload;
         // collisions have already been rejected by the preflight above.
@@ -229,8 +729,18 @@ public class WorkflowService {
             throw new IllegalArgumentException("Destructive All_BP Replace is disabled to protect carton/scan data. Use Sales Shared Import instead.");
         }
 
-        LocalDateTime now = LocalDateTime.now();
+        // Reserve unique four-key identities before any PO is saved. Mongo's
+        // unique _id index serializes concurrent imports across JVMs / Factories.
         String actor = RequestActor.current();
+        requireOrder(buyerCode, orderId); // Recheck deletion fence after parsing Excel.
+        List<PoIdentityRegistryService.Reservation> reservations = identityRegistry.reserve(identities, actor);
+        try {
+            requireOrder(buyerCode, orderId); // Do not write PO after an Admin starts deleting the Order.
+        } catch (RuntimeException ex) {
+            identityRegistry.releaseAll(reservations);
+            throw ex;
+        }
+        LocalDateTime now = LocalDateTime.now();
         List<PurchaseOrder> poBatch = new ArrayList<>(parsed.size());
         Map<AllBpBusinessKey, PurchaseOrder> existing = new HashMap<>();
         if (sharedImport) {
@@ -319,7 +829,41 @@ public class WorkflowService {
             po.setUpdatedAt(now);
             poBatch.add(po);
         }
-        poRepository.saveAll(poBatch);
+        List<PurchaseOrder> persisted;
+        try {
+            persisted = poRepository.saveAll(poBatch);
+        } catch (RuntimeException ex) {
+            // Standalone MongoDB saveAll can partially succeed. Reconcile each
+            // reservation against persisted _id values before releasing it.
+            // If the DB cannot be reached, intentionally leave RESERVED claims
+            // in place for administrator investigation rather than risk duplicates.
+            try {
+                Map<String, PoIdentityRegistryService.Reservation> byId = new HashMap<>();
+                for (PoIdentityRegistryService.Reservation claim : reservations) byId.put(claim.id(), claim);
+                List<PoIdentityRegistryService.Reservation> confirmedUnsaved = new ArrayList<>();
+                for (PurchaseOrder candidate : poBatch) {
+                    PoIdentityRegistryService.Input input = PoIdentityRegistryService.from(candidate);
+                    String key = PoIdentityRegistryService.identityId(AppConstants.Buyer.LULULEMON,
+                            input.masterPo(), input.poNumber(), input.packingPlan(), input.salesOrderPts());
+                    // An unknown id is not proof of a failed insert. Keep its
+                    // claim RESERVED until an administrator reconciles it.
+                    if (candidate.getId() == null) continue;
+                    if (poRepository.existsById(candidate.getId())) {
+                        identityRegistry.commit(input, candidate.getId(), reservations);
+                    } else {
+                        PoIdentityRegistryService.Reservation claim = byId.get(key);
+                        if (claim != null) confirmedUnsaved.add(claim);
+                    }
+                }
+                identityRegistry.releaseAll(confirmedUnsaved);
+            } catch (RuntimeException recoveryFailure) {
+                ex.addSuppressed(recoveryFailure);
+            }
+            throw ex;
+        }
+        for (PurchaseOrder po : persisted) {
+            identityRegistry.commit(PoIdentityRegistryService.from(po), po.getId(), reservations);
+        }
 
         warnings.add("Lazy generation enabled: import creates PO records only. Cartons are generated when a PO is opened; Items are generated when a Carton is opened.");
         audit(AppConstants.AuditAction.ALL_BP_IMPORT, orderId,
@@ -335,7 +879,9 @@ public class WorkflowService {
         int safeSize = Math.max(1, Math.min(size, 200));
 
         Criteria criteria = Criteria.where("orderId").is(orderId).and("buyerCode").is(AppConstants.Buyer.LULULEMON);
-        if (!factoryAccess.isUnrestricted()) {
+        String selectedFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
+        if (selectedFactory != null) criteria = criteria.and("factoryCode").is(selectedFactory);
+        else if (!factoryAccess.isUnrestricted()) {
             criteria = criteria.and("factoryCode").in(factoryAccess.accessibleFactories());
         }
         String statusKey = clean(status);
@@ -371,6 +917,7 @@ public class WorkflowService {
     public PoDetailResponse getPo(String buyerCode, String orderId, String poId) {
         requireOrder(buyerCode, orderId);
         PurchaseOrder po = requirePo(orderId, poId);
+        selectedFactoryScope.assertMatches(selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON), po.getFactoryCode());
         if (!canAccessFactoryOrUnassigned(po.getFactoryCode())
                 && !factoryAccess.canAccessWeighingFactory(po.getFactoryCode())) {
             throw new org.springframework.security.access.AccessDeniedException("Factory access denied");
@@ -389,6 +936,12 @@ public class WorkflowService {
      */
     public synchronized PurchaseOrder updateImportedPo(
             String buyerCode, String orderId, String poId, PoUpdateRequest request
+    ) {
+        return updateImportedPoInternal(buyerCode, orderId, poId, request, false);
+    }
+
+    private synchronized PurchaseOrder updateImportedPoInternal(
+            String buyerCode, String orderId, String poId, PoUpdateRequest request, boolean allowSourceRowDelete
     ) {
         requireOrder(buyerCode, orderId);
         PurchaseOrder po = requirePo(orderId, poId);
@@ -426,7 +979,7 @@ public class WorkflowService {
         boolean hadGeneratedCartons = !generatedBeforeEdit.isEmpty();
         boolean hadGeneratedItems = generatedBeforeEdit.stream().anyMatch(carton -> itemRepository.existsByCartonId(carton.getId()));
 
-        EditedAllBpPlan allBpPlan = buildEditedAllBpPlan(po, request);
+        EditedAllBpPlan allBpPlan = buildEditedAllBpPlan(po, request, allowSourceRowDelete);
 
         String factoryCode = normalizeFactory(request.factoryCode());
         if (factoryCode == null) factoryCode = normalizeFactory(po.getFactoryCode());
@@ -505,6 +1058,16 @@ public class WorkflowService {
             po.setGrossWeightKg(request.grossWeightKg());
         }
 
+        PoIdentityRegistryService.Input originalIdentity = new PoIdentityRegistryService.Input(
+                originalMasterPo, originalNumber, originalPackingPlan, originalSalesOrderPts, originalFactory, orderId);
+        PoIdentityRegistryService.Input changedIdentity = new PoIdentityRegistryService.Input(
+                po.getMasterPo(), poNumber, po.getPackingPlan(), po.getSalesOrderPts(), factoryCode, orderId);
+        boolean identityChanged = !PoIdentityRegistryService.identityId(AppConstants.Buyer.LULULEMON,
+                originalIdentity.masterPo(), originalIdentity.poNumber(), originalIdentity.packingPlan(), originalIdentity.salesOrderPts())
+                .equals(PoIdentityRegistryService.identityId(AppConstants.Buyer.LULULEMON,
+                changedIdentity.masterPo(), changedIdentity.poNumber(), changedIdentity.packingPlan(), changedIdentity.salesOrderPts()));
+        if (identityChanged) identityRegistry.preflight(List.of(changedIdentity), poId);
+
         // Editing must not bypass four-column identity, including case/space variants.
         AllBpPoFourKeyGuard.checkEditAgainstSaved(
                 poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(
@@ -552,7 +1115,25 @@ public class WorkflowService {
         po.setUpdatedBy(RequestActor.current());
         po.setUpdatedAt(LocalDateTime.now());
 
-        PurchaseOrder saved = poRepository.save(po);
+        List<PoIdentityRegistryService.Reservation> editReservation = identityChanged
+                ? identityRegistry.reserve(List.of(changedIdentity), RequestActor.current()) : List.of();
+        PurchaseOrder saved;
+        try {
+            saved = poRepository.save(po);
+        } catch (RuntimeException ex) {
+            identityRegistry.releaseAll(editReservation);
+            throw ex;
+        }
+        if (identityChanged) {
+            identityRegistry.commit(changedIdentity, saved.getId(), editReservation);
+            PurchaseOrder previousIdentityPo = new PurchaseOrder();
+            previousIdentityPo.setId(poId);
+            previousIdentityPo.setMasterPo(originalMasterPo);
+            previousIdentityPo.setPoNumber(originalNumber);
+            previousIdentityPo.setPackingPlan(originalPackingPlan);
+            previousIdentityPo.setSalesOrderPts(originalSalesOrderPts);
+            identityRegistry.releaseCommitted(previousIdentityPo);
+        }
 
         if (!operational) {
             // No packing or shipment data: a full plan edit can safely regenerate children.
@@ -598,6 +1179,7 @@ public class WorkflowService {
         cartonRepository.deleteByPoId(poId);
         scanEventRepository.deleteByPoId(poId);
         poRepository.delete(po);
+        identityRegistry.releaseAfterPoDelete(po);
 
         audit(AppConstants.AuditAction.PO_DELETE, poId, "Deleted imported PO " + poNumber + " and its unstarted generated Cartons/Items.");
         socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.PO_DELETED, poId);
@@ -878,6 +1460,7 @@ public class WorkflowService {
 
     public LabelLookupResponse lookupCartonLabel(String buyerCode, String orderId, LabelLookupRequest request) {
         requireOrder(buyerCode, orderId);
+        String selectedFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         String poNumber = clean(request == null ? null : request.poNumber());
         String sku = normalizeSku(request == null ? null : request.sku());
         if (poNumber == null) throw new IllegalArgumentException(AppMessages.CARTON_LABEL_PO_REQUIRED);
@@ -886,7 +1469,8 @@ public class WorkflowService {
         List<LabelCandidate> flatCandidates = new ArrayList<>();
         for (PurchaseOrder po : poRepository.findAllByOrderIdAndBuyerCodeAndPoNumber(
                 orderId, AppConstants.Buyer.LULULEMON, poNumber)) {
-            if (!canAccessFactoryOrUnassigned(po.getFactoryCode())) continue;
+            if (!canAccessFactoryOrUnassigned(po.getFactoryCode())
+                    || !selectedFactoryScope.matches(selectedFactory, po.getFactoryCode())) continue;
 
             String assignedSku = normalizeSku(po.getSku());
             // Imported POs intentionally start without SKU. Once a SKU has been
@@ -1065,6 +1649,8 @@ public class WorkflowService {
         carton = cartonRepository.save(carton);
 
         if (packingComplete) refreshPoStatus(po);
+        passScan(orderId, po.getId(), cartonId, AppConstants.ScanType.CARTON_LABEL_SKU,
+                request.sku(), "Carton label SKU confirmed");
         audit(AppConstants.AuditAction.CONFIRM_CARTON_LABEL, cartonId,
                 "Confirmed carton identity for PO " + po.getPoNumber() + " carton " + carton.getCartonNo()
                         + ", SKU " + scannedSku + ", system Unit Qty " + expectedQty
@@ -1254,7 +1840,7 @@ public class WorkflowService {
         Query rfidHistory = Query.query(Criteria.where("cartonId").is(cartonId)
                 .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
         if (mongoTemplate.exists(rfidHistory,
-                org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession.class)) {
+                RfidScanSession.class)) {
             throw new IllegalArgumentException("An RFID session already exists for this carton. Unassign is blocked to preserve its inspection history.");
         }
         Query weightHistory = Query.query(Criteria.where("cartonId").is(cartonId)
@@ -1338,29 +1924,209 @@ public class WorkflowService {
         return carton;
     }
 
+    /** History queries read ONLY the shared snapshot collection, never PO/Carton/RFID lists. */
+    private Criteria historyScope(String buyerCode, String orderId) {
+        requireOrder(buyerCode, orderId);
+        Criteria scope = Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
+                .and("orderId").is(orderId);
+        String selected = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
+        if (selected != null) {
+            factoryAccess.assertFactoryAccess(selected);
+            scope.and("factoryCode").is(selected);
+        } else if (!factoryAccess.isUnrestricted()) {
+            scope.and("factoryCode").in(factoryAccess.accessibleFactories());
+        }
+        return scope;
+    }
+
+    private List<String> distinctHistoryValues(Criteria scope, String field) {
+        return mongoTemplate.findDistinct(Query.query(scope), field,
+                CartonProcessingHistory.class, String.class).stream()
+                .filter(value -> value != null && !value.isBlank())
+                .distinct().sorted(String.CASE_INSENSITIVE_ORDER).toList();
+    }
+
+    public CartonHistoryFilters historyFilters(String buyerCode, String orderId) {
+        Criteria scope = historyScope(buyerCode, orderId);
+        return new CartonHistoryFilters(distinctHistoryValues(scope, "masterPo"),
+                distinctHistoryValues(scope, "poNumber"),
+                distinctHistoryValues(scope, "packingPlan"),
+                distinctHistoryValues(scope, "salesOrderPts"));
+    }
+
+    /** Indexed, server-side paging and filtering without any cross-collection loop. */
+    public Page<CartonHistoryRow> history(String buyerCode, String orderId, String masterPo,
+            String poNumber, String packingPlan, String salesOrderPts, String keyword,
+            String status, String scannedBy, String weighedBy, String rfidStatus, String weightStatus,
+            LocalDate dateFrom, LocalDate dateTo, int page, int size) {
+        if (dateFrom != null && dateTo != null && dateFrom.isAfter(dateTo))
+            throw new IllegalArgumentException("Date From cannot be later than Date To");
+        Criteria base = historyScope(buyerCode, orderId);
+        List<Criteria> terms = new ArrayList<>();
+        terms.add(base);
+        if (clean(masterPo) != null) terms.add(Criteria.where("masterPo").is(masterPo.trim()));
+        if (clean(poNumber) != null) terms.add(Criteria.where("poNumber").is(poNumber.trim()));
+        if (clean(packingPlan) != null) terms.add(Criteria.where("packingPlan").is(packingPlan.trim()));
+        if (clean(salesOrderPts) != null) terms.add(Criteria.where("salesOrderPts").is(salesOrderPts.trim()));
+        String term = clean(keyword);
+        if (term != null) {
+            String quoted = java.util.regex.Pattern.quote(term);
+            List<Criteria> alternatives = new ArrayList<>();
+            for (String field : List.of("sscc18", "sku", "poNumber", "masterPo", "packingPlan", "salesOrderPts")) {
+                alternatives.add(Criteria.where(field).regex(quoted, "i"));
+            }
+            if (term.matches("\\d{1,9}")) alternatives.add(Criteria.where("cartonNo").is(Integer.valueOf(term)));
+            terms.add(new Criteria().orOperator(alternatives.toArray(new Criteria[0])));
+        }
+        if (clean(scannedBy) != null) terms.add(Criteria.where("scannedBy")
+                .regex(java.util.regex.Pattern.quote(scannedBy.trim()), "i"));
+        if (clean(weighedBy) != null) terms.add(Criteria.where("weighedBy")
+                .regex(java.util.regex.Pattern.quote(weighedBy.trim()), "i"));
+        if ("PASS".equalsIgnoreCase(safe(rfidStatus)) || "FAILED".equalsIgnoreCase(safe(rfidStatus)))
+            terms.add(Criteria.where("rfidStatus").is(rfidStatus.trim().toUpperCase(Locale.ROOT)));
+        if ("PASS".equalsIgnoreCase(safe(weightStatus)) || "FAILED".equalsIgnoreCase(safe(weightStatus)))
+            terms.add(Criteria.where("weightStatus").is(weightStatus.trim().toUpperCase(Locale.ROOT)));
+        if ("PASS".equalsIgnoreCase(safe(status)) || "FAILED".equalsIgnoreCase(safe(status)))
+            terms.add(Criteria.where("status").is(status.trim().toUpperCase(Locale.ROOT)));
+        if (dateFrom != null) terms.add(Criteria.where("weightTime").gte(dateFrom.atStartOfDay()));
+        if (dateTo != null) terms.add(Criteria.where("weightTime").lt(dateTo.plusDays(1).atStartOfDay()));
+        Criteria combined = terms.size() == 1 ? base : new Criteria().andOperator(terms.toArray(new Criteria[0]));
+        Pageable paging = PageRequest.of(Math.max(0, page), Math.min(100, Math.max(1, size)));
+        Query query = Query.query(combined);
+        long count = mongoTemplate.count(query, CartonProcessingHistory.class);
+        query.with(Sort.by(Sort.Order.desc("weightTime"), Sort.Order.desc("_id"))).with(paging);
+        List<CartonHistoryRow> rows = mongoTemplate.find(query, CartonProcessingHistory.class).stream()
+                .map(row -> new CartonHistoryRow(row.getCartonId(), row.getCartonNo(), row.getPoId(),
+                        row.getCartonStatus(), row.getOrderName(), row.getFactoryCode(), row.getMasterPo(),
+                        row.getPoNumber(), row.getPackingPlan(), row.getSalesOrderPts(), row.getSscc18(),
+                        row.getSku(), row.getPlannedQty(), row.getRfidStatus(), row.getWeightStatus(),
+                        row.getStatus(), row.getScannedBy(), row.getWeighedBy(), row.getScanTime(),
+                        row.getWeightTime(), row.getUpdatedAt())).toList();
+        return new PageImpl<>(rows, paging, count);
+    }
+
+    /** Manual ADMIN repair of one completed carton after an interrupted standalone-Mongo write.
+     * Never run reconciliation automatically during a History GET or on a timer.
+     */
+    public void reconcileCompletedHistory(String buyerCode, String orderId, String cartonId) {
+        requireOrder(buyerCode, orderId);
+        Carton carton = requireCarton(orderId, cartonId);
+        factoryAccess.assertFactoryAccess(carton.getFactoryCode());
+        selectedFactoryScope.assertMatches(selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON),
+                carton.getFactoryCode());
+        if (!isCompletedHistoryCarton(carton))
+            throw new IllegalArgumentException("Only completed cartons can be reconciled into History");
+        PurchaseOrder po = requirePo(orderId, carton.getPoId());
+        Query latest = Query.query(Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
+                .and("orderId").is(orderId).and("cartonId").is(cartonId)
+                .and("action").in(AppConstants.WeightAction.WEIGH, AppConstants.WeightAction.OVERRIDE))
+                .with(Sort.by(Sort.Direction.DESC, "createdAt")).limit(1);
+        WeighingResult saved = mongoTemplate.findOne(latest, WeighingResult.class);
+        if (saved == null || !Objects.equals(saved.getCreatedAt(), carton.getWeighedAt())
+                || !Objects.equals(saved.getResult(), carton.getWeightStatus()))
+            throw new IllegalStateException("Current finalized Weight event missing; no History repair performed");
+        historyProjection.recordCompleted(carton, po, saved);
+        socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.WEIGHT_RESULT_PREFIX + carton.getWeightStatus(), cartonId);
+    }
+
+    static boolean isCompletedHistoryCarton(Carton carton) {
+        return carton != null
+                && (AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus())
+                    || AppConstants.RfidCheck.FAILED.equals(carton.getRfidStatus()))
+                && (AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())
+                    || AppConstants.WeightStatus.FAILED.equals(carton.getWeightStatus()))
+                && carton.getWeighedAt() != null;
+    }
+
+    /** Detail lookup checks the Factory again; callers cannot retrieve cross-Factory EPCs. */
+    public TraceResult historyDetail(String buyerCode, String orderId, String cartonId) {
+        requireOrder(buyerCode, orderId);
+        Carton carton = requireCarton(orderId, cartonId);
+        // An arbitrary carton ID must not expose planned/incomplete cartons via History Detail.
+        if (!isCompletedHistoryCarton(carton))
+            throw new IllegalArgumentException("Carton is not yet in completed History");
+        if (!mongoTemplate.exists(Query.query(Criteria.where("_id")
+                .is(CartonProcessingHistory.key(AppConstants.Buyer.LULULEMON, cartonId))
+                .and("orderId").is(orderId).and("buyerCode").is(AppConstants.Buyer.LULULEMON)),
+                CartonProcessingHistory.class))
+            throw new IllegalArgumentException("Carton has no completed History snapshot");
+        factoryAccess.assertFactoryAccess(carton.getFactoryCode());
+        selectedFactoryScope.assertMatches(selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON),
+                carton.getFactoryCode());
+        Query poQuery = Query.query(Criteria.where("_id").is(carton.getPoId())
+                .and("orderId").is(orderId).and("buyerCode").is(AppConstants.Buyer.LULULEMON));
+        poQuery.fields().include("factoryCode").include("poNumber").include("masterPo")
+                .include("packingPlan").include("salesOrderPts").include("sku")
+                .include("style").include("color").include("size");
+        PurchaseOrder po = mongoTemplate.findOne(poQuery, PurchaseOrder.class);
+        if (po == null) throw new IllegalArgumentException("PO not found in this Order");
+        factoryAccess.assertFactoryAccess(po.getFactoryCode());
+        if (!Objects.equals(po.getFactoryCode(), carton.getFactoryCode()))
+            throw new org.springframework.security.access.AccessDeniedException("History Factory mismatch");
+        // Detail is fetched for one explicitly selected carton; include all saved attempts,
+        // not only the latest 200 from the legacy quick-trace endpoints.
+        List<ScanEvent> allScans = mongoTemplate.find(Query.query(Criteria.where("cartonId")
+                        .is(carton.getId()).and("buyerCode").is(AppConstants.Buyer.LULULEMON))
+                .with(Sort.by(Sort.Direction.DESC, "createdAt")), ScanEvent.class);
+        List<WeighingResult> allWeights = mongoTemplate.find(Query.query(Criteria.where("cartonId")
+                        .is(carton.getId()))
+                .with(Sort.by(Sort.Direction.DESC, "createdAt")), WeighingResult.class);
+        List<RfidScanSession> allRfid = mongoTemplate.find(Query.query(Criteria.where("cartonId")
+                        .is(carton.getId()).and("buyerCode").is(AppConstants.Buyer.LULULEMON))
+                .with(Sort.by(Sort.Direction.DESC, "startedAt")), RfidScanSession.class);
+        return new TraceResult(po, carton, itemRepository.findByCartonIdOrderByItemNoAsc(carton.getId()),
+                allScans, allWeights, allRfid);
+    }
+
     public List<TraceResult> trace(String buyerCode, String orderId, String keyword) {
         requireOrder(buyerCode, orderId);
+        String selectedFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         String raw = clean(keyword);
-        if (raw == null) throw new IllegalArgumentException(AppMessages.TRACE_KEY_REQUIRED);
+        // Blank keyword means recent cartons of the chosen Order / permitted Factory.
+        // History may be opened right after scanning without knowing an SSCC to search.
+        if (raw == null) {
+            Criteria criteria = Criteria.where("orderId").is(orderId)
+                    .and("buyerCode").is(AppConstants.Buyer.LULULEMON);
+            if (selectedFactory != null) criteria.and("factoryCode").is(selectedFactory);
+            else if (!factoryAccess.isUnrestricted())
+                criteria.and("factoryCode").in(factoryAccess.accessibleFactories());
+            // A bounded, indexed query avoids loading an entire large Order before opening History.
+            Query recentQuery = Query.query(criteria)
+                    .with(Sort.by(Sort.Direction.DESC, "updatedAt")).limit(100);
+            Map<String, PurchaseOrder> cachedPos = new HashMap<>();
+            List<TraceResult> recent = new ArrayList<>();
+            for (Carton carton : mongoTemplate.find(recentQuery, Carton.class)) {
+                if (!canAccessFactoryOrUnassigned(carton.getFactoryCode())) continue;
+                PurchaseOrder po = cachedPos.computeIfAbsent(carton.getPoId(), id -> requirePo(orderId, id));
+                recent.add(new TraceResult(po, carton,
+                    itemRepository.findByCartonIdOrderByItemNoAsc(carton.getId()),
+                    scanEventRepository.findTop200ByCartonIdOrderByCreatedAtDesc(carton.getId()),
+                    weightEventsForCarton(carton.getId()), rfidSessionsForCarton(carton.getId())));
+            }
+            return recent;
+        }
         String skuKey = normalizeSku(raw);
         LinkedHashMap<String, Carton> matchedCartons = new LinkedHashMap<>();
         LinkedHashMap<String, PurchaseOrder> matchedPos = new LinkedHashMap<>();
 
         String canonicalSscc = SsccNormalizer.normalize(raw);
         if (canonicalSscc != null) cartonRepository.findBySscc18(canonicalSscc).ifPresent(carton -> {
-            if (orderId.equals(carton.getOrderId()) && AppConstants.Buyer.LULULEMON.equals(carton.getBuyerCode()) && canAccessFactoryOrUnassigned(carton.getFactoryCode())) {
+            if (orderId.equals(carton.getOrderId()) && AppConstants.Buyer.LULULEMON.equals(carton.getBuyerCode()) && canAccessFactoryOrUnassigned(carton.getFactoryCode())
+                    && selectedFactoryScope.matches(selectedFactory, carton.getFactoryCode())) {
                 matchedCartons.put(carton.getId(), carton);
             }
         });
         cartonRepository.findById(raw).ifPresent(carton -> {
-            if (orderId.equals(carton.getOrderId()) && AppConstants.Buyer.LULULEMON.equals(carton.getBuyerCode()) && canAccessFactoryOrUnassigned(carton.getFactoryCode())) {
+            if (orderId.equals(carton.getOrderId()) && AppConstants.Buyer.LULULEMON.equals(carton.getBuyerCode()) && canAccessFactoryOrUnassigned(carton.getFactoryCode())
+                    && selectedFactoryScope.matches(selectedFactory, carton.getFactoryCode())) {
                 matchedCartons.put(carton.getId(), carton);
             }
         });
 
         String lowered = raw.toLowerCase(Locale.ROOT);
         for (PurchaseOrder po : poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON)) {
-            if (!canAccessFactoryOrUnassigned(po.getFactoryCode())) continue;
+            if (!canAccessFactoryOrUnassigned(po.getFactoryCode())
+                    || !selectedFactoryScope.matches(selectedFactory, po.getFactoryCode())) continue;
             boolean poMatch = safe(po.getPoNumber()).toLowerCase(Locale.ROOT).contains(lowered)
                     || safe(po.getMasterPo()).toLowerCase(Locale.ROOT).contains(lowered)
                     || (skuKey != null && skuKey.equals(normalizeSku(po.getSku())));
@@ -1378,7 +2144,7 @@ public class WorkflowService {
                 PurchaseOrder po = requirePo(orderId, carton.getPoId());
                 List<CartonItem> items = itemRepository.findByCartonIdOrderByItemNoAsc(carton.getId());
                 List<ScanEvent> events = scanEventRepository.findTop200ByCartonIdOrderByCreatedAtDesc(carton.getId());
-                results.add(new TraceResult(po, carton, items, events, weightEventsForCarton(carton.getId())));
+                results.add(new TraceResult(po, carton, items, events, weightEventsForCarton(carton.getId()), rfidSessionsForCarton(carton.getId())));
             }
             return results;
         }
@@ -1386,18 +2152,25 @@ public class WorkflowService {
         for (PurchaseOrder po : matchedPos.values()) {
             List<Carton> cartons = cartonRepository.findByPoIdOrderByCartonNoAsc(po.getId());
             if (cartons.isEmpty()) {
-                results.add(new TraceResult(po, null, List.of(), scanEventRepository.findTop200ByPoIdOrderByCreatedAtDesc(po.getId()), weightEventsForPo(po.getId())));
+                results.add(new TraceResult(po, null, List.of(), scanEventRepository.findTop200ByPoIdOrderByCreatedAtDesc(po.getId()), weightEventsForPo(po.getId()), List.of()));
                 continue;
             }
             for (Carton carton : cartons) {
                 results.add(new TraceResult(
                         po, carton, itemRepository.findByCartonIdOrderByItemNoAsc(carton.getId()),
                         scanEventRepository.findTop200ByCartonIdOrderByCreatedAtDesc(carton.getId()),
-                        weightEventsForCarton(carton.getId())
+                        weightEventsForCarton(carton.getId()), rfidSessionsForCarton(carton.getId())
                 ));
             }
         }
         return results.stream().limit(200).toList();
+    }
+
+    private List<RfidScanSession> rfidSessionsForCarton(String cartonId) {
+        if (clean(cartonId) == null) return List.of();
+        return mongoTemplate.find(Query.query(Criteria.where("cartonId").is(cartonId)
+                        .and("buyerCode").is(AppConstants.Buyer.LULULEMON))
+                .with(Sort.by(Sort.Direction.DESC, "startedAt")).limit(200), RfidScanSession.class);
     }
 
     private List<WeighingResult> weightEventsForCarton(String cartonId) {
@@ -1418,12 +2191,15 @@ public class WorkflowService {
 
     public List<ScanEvent> recentEvents(String buyerCode, String orderId) {
         requireOrder(buyerCode, orderId);
+        String selectedFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         Set<String> allowedFactories = new HashSet<>(factoryAccess.accessibleFactories());
         // Factory is mandatory on new Orders; unassigned historical events are Admin-only.
         boolean unrestricted = factoryAccess.isUnrestricted();
         Map<String, String> poFactory = poRepository.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, AppConstants.Buyer.LULULEMON).stream()
                 .collect(Collectors.toMap(PurchaseOrder::getId, PurchaseOrder::getFactoryCode, (a, b) -> a));
         return scanEventRepository.findTop100ByOrderIdAndBuyerCodeOrderByCreatedAtDesc(orderId, AppConstants.Buyer.LULULEMON).stream()
+                .filter(event -> selectedFactoryScope.matches(selectedFactory,
+                        event.getPoId() == null ? null : poFactory.get(event.getPoId())))
                 .filter(event -> unrestricted || (event.getPoId() != null && allowedFactories.contains(normalizeFactory(poFactory.get(event.getPoId())))))
                 .toList();
     }
@@ -1582,14 +2358,14 @@ public class WorkflowService {
         // Legacy factory-less data remains Admin-only, not visible to regular users.
         if (normalized == null) return factoryAccess.isUnrestricted();
         return factoryAccess.canAccessFactory(normalized)
-                || (factoryAccess.currentUser().canWeightCheck()
+                || (factoryAccess.currentUser().canLululemonScanWeight()
                     && factoryAccess.canAccessWeighingFactory(normalized));
     }
 
     private void assertFactoryAccessIfPresent(String factoryCode) {
         String normalized = normalizeFactory(factoryCode);
         if (normalized != null && !factoryAccess.canAccessFactory(normalized)
-                && !(factoryAccess.currentUser().canWeightCheck()
+                && !(factoryAccess.currentUser().canLululemonScanWeight()
                     && factoryAccess.canAccessWeighingFactory(normalized)))
             throw new org.springframework.security.access.AccessDeniedException("Factory access denied: " + normalized);
     }
@@ -1597,7 +2373,13 @@ public class WorkflowService {
     private PackingOrder requireOrder(String buyerCode, String orderId) {
         String buyer = BuyerAccess.normalize(buyerCode);
         if (!AppConstants.Buyer.LULULEMON.equals(buyer)) throw new IllegalArgumentException(AppMessages.workflowOnlyFor(AppConstants.Buyer.LULULEMON));
-        return orderService.getEntity(AppConstants.Buyer.LULULEMON, orderId);
+        PackingOrder order = orderService.getEntity(AppConstants.Buyer.LULULEMON, orderId);
+        if (AppConstants.OrderDeletion.DELETING.equals(order.getDeletionState())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "Order deletion is in progress. Contact Admin before importing or processing this Order.");
+        }
+        return order;
     }
 
     private PurchaseOrder requirePo(String orderId, String poId) {
@@ -1763,7 +2545,9 @@ public class WorkflowService {
         Map<String, Integer> seenLabels = new LinkedHashMap<>();
         for (int col = 0; col < header.getLastCellNum(); col++) {
             String label = clean(excelSupport.text(header, col, evaluator));
-            if (label == null) continue;
+            String canonical = canonicalAllBpKey(label);
+            if (label == null || isExcelActionMeta(label)
+                    || (canonical != null && AppConstants.AllBp.RETIRED_KEYS.contains(canonical))) continue;
             int occurrence = seenLabels.merge(label, 1, Integer::sum);
             String displayLabel = occurrence == 1 ? label : label + " [" + occurrence + "]";
             result.add(new SourceColumn(displayLabel, col));
@@ -1840,11 +2624,17 @@ public class WorkflowService {
     }
 
     private EditedAllBpPlan buildEditedAllBpPlan(PurchaseOrder po, PoUpdateRequest request) {
+        return buildEditedAllBpPlan(po, request, false);
+    }
+
+    private EditedAllBpPlan buildEditedAllBpPlan(PurchaseOrder po, PoUpdateRequest request, boolean allowSourceRowDelete) {
         List<Map<String, String>> submitted = request.allBpRows();
         if (submitted == null || submitted.isEmpty()) return null;
 
         List<Map<String, String>> existing = po.getAllBpRows() == null ? List.of() : po.getAllBpRows();
-        if (!existing.isEmpty() && submitted.size() != existing.size()) {
+        if (allowSourceRowDelete && submitted.isEmpty())
+            throw new IllegalArgumentException("An edited PO must retain at least one item.");
+        if (!allowSourceRowDelete && !existing.isEmpty() && submitted.size() != existing.size()) {
             throw new IllegalArgumentException(AppMessages.ALL_BP_ROW_COUNT_IMMUTABLE);
         }
 
@@ -1880,8 +2670,9 @@ public class WorkflowService {
         );
 
         for (int index = 0; index < submitted.size(); index++) {
-            Map<String, String> base = index < existing.size() && existing.get(index) != null
-                    ? existing.get(index) : Map.of();
+            Map<String, String> base = allowSourceRowDelete
+                    ? (submitted.get(index) == null ? Map.of() : submitted.get(index))
+                    : (index < existing.size() && existing.get(index) != null ? existing.get(index) : Map.of());
             Map<String, String> incoming = submitted.get(index) == null ? Map.of() : submitted.get(index);
             Map<String, String> edited = new LinkedHashMap<>();
 
@@ -1961,24 +2752,12 @@ public class WorkflowService {
         int fullCartons = qty / pcsPerCarton;
         int remainder = qty - (fullCartons * pcsPerCarton);
 
-        BigDecimal fobPrice = optionalDecimalOrZero(rowCanonicalValue(row, "FOB_PRICE"), "FOB Price", rowNo, false);
-        BigDecimal careLabel = optionalDecimalOrZero(rowCanonicalValue(row, "CARE_CONTENT_LABEL"), "Care & Content Label", rowNo, false);
-        BigDecimal inspectionTag = optionalDecimalOrZero(rowCanonicalValue(row, "CHINA_INSPECTION_TAG"), "China Inspection Tag", rowNo, false);
-        BigDecimal dpPercent = optionalDecimalOrZero(rowCanonicalValue(row, "DP_PERCENT"), "DP%", rowNo, true);
-
-        BigDecimal priceTagTotal = fobPrice.add(careLabel).add(inspectionTag);
-        BigDecimal fobAmount = q.multiply(fobPrice);
-        BigDecimal totalFobPriceTag = q.multiply(priceTagTotal);
-        BigDecimal fobFtyPrice = priceTagTotal.multiply(dpPercent).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal fobFtyAmount = q.multiply(fobFtyPrice);
-
+        // FOB and price/label fields were retired from the Lululemon import format.
+        // Only carton quantity calculations remain; historical FOB values in MongoDB
+        // are intentionally not migrated or deleted.
         putCanonicalRowValue(row, "ODD_RATIO", plainDecimal(oddRatio));
         putCanonicalRowValue(row, "CTNS", Integer.toString(fullCartons));
         putCanonicalRowValue(row, "REMAINDER", Integer.toString(remainder));
-        putCanonicalRowValue(row, "FOB_AMOUNT", plainDecimal(fobAmount));
-        putCanonicalRowValue(row, "TOTAL_FOB_PRICE_TAG", plainDecimal(totalFobPriceTag));
-        putCanonicalRowValue(row, "FOB_FTY_PRICE", fobFtyPrice.toPlainString());
-        putCanonicalRowValue(row, "FOB_FTY_AMOUNT", plainDecimal(fobFtyAmount));
     }
 
     private String rowCanonicalValue(Map<String, String> row, String canonical) {
@@ -2131,6 +2910,14 @@ public class WorkflowService {
     private String normalizeFactory(String value) {
         String clean = clean(value);
         return clean == null ? null : clean.toUpperCase(Locale.ROOT).replaceAll("\\s+", " ");
+    }
+
+    /** Every successful direct SSCC/SKU identification creates immutable scan evidence, even for repeat scans. */
+    public void recordCartonIdentification(Carton carton, String scannedSku) {
+        if (carton == null || carton.getOrderId() == null) return;
+        assertFactoryAccessIfPresent(carton.getFactoryCode());
+        passScan(carton.getOrderId(), carton.getPoId(), carton.getId(), "SSCC_SKU_IDENTIFY",
+                carton.getSscc18(), "SSCC-18 and SKU verified: " + Objects.toString(scannedSku, ""));
     }
 
     private void passScan(String orderId, String poId, String cartonId, String type, String raw, String message) {

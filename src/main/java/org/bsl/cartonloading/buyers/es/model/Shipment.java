@@ -19,7 +19,7 @@ public class Shipment {
     private String orderId;
     private String shipmentNo;
     private String destination;
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate plannedDate;
     private String carrier;
     private String reference;
@@ -29,9 +29,9 @@ public class Shipment {
     /** Locks the plan against cancellation once Packing starts a weight job. */
     private boolean executionStarted;
     private String createdBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
     private String shippedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime shippedAt;
 }

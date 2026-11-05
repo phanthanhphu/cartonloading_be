@@ -13,8 +13,8 @@ import org.springframework.data.mongodb.core.mapping.Field;
 @Document(collection = AppConstants.Collection.PO_PICK_CLAIMS)
 public class PoPickClaim {
     @Id private String id;
-    @Field("buyer_key") private String buyerKey = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
-    private String buyerCode = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
+    @Field("buyer_key") private String buyerKey = AppConstants.Buyer.LULULEMON;
+    private String buyerCode = AppConstants.Buyer.LULULEMON;
     private String orderId;
     private String poNumber;
     private String factoryCode;

@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Set;
 
@@ -29,6 +31,13 @@ public class User {
     private String profileImageUrl;
     private boolean isEnabled;
     private long tokenVersion;
+    /** Latest security/permission change, visible only to this user via a signed older JWT. */
+    private List<String> lastAccessChangeDetails = new ArrayList<>();
+    private long lastAccessChangeVersion;
+    public List<String> getLastAccessChangeDetails() { return lastAccessChangeDetails == null ? List.of() : List.copyOf(lastAccessChangeDetails); }
+    public void setLastAccessChangeDetails(List<String> value) { lastAccessChangeDetails = value == null ? new ArrayList<>() : new ArrayList<>(value); }
+    public long getLastAccessChangeVersion() { return lastAccessChangeVersion; }
+    public void setLastAccessChangeVersion(long value) { lastAccessChangeVersion = value; }
     private String departmentId;
 
     /** Buyer workspaces assigned to this account. ADMIN always receives all buyers. */
@@ -83,13 +92,118 @@ public class User {
      */
     private List<String> accessPermissions = new ArrayList<>();
 
+    /**
+     * Independent Buyer-specific permissions. null means pre-migration account and
+     * uses a *read-only* legacy projection; an explicit empty map never grants access.
+     * ES continues to use accessPermissions without a behavioral change.
+     */
+    private Map<String, List<String>> buyerAccessPermissions;
+
+    public static List<String> normalizeLululemonPermissions(Collection<String> values) {
+        Set<String> permissions = new LinkedHashSet<>();
+        if (values != null) for (String raw : values) {
+            if (raw == null) continue;
+            String code = raw.trim().toUpperCase(Locale.ROOT);
+            if (AppConstants.Permission.LULU_UPLOAD_EDIT_DATA.equals(code)
+                    || AppConstants.Permission.LULU_SHIPPING_SCHEDULER.equals(code)
+                    || AppConstants.Permission.LULU_SHIPPING_SCHEDULE_CREATE.equals(code)
+                    || AppConstants.Permission.LULU_SHIPPING_SCHEDULE_REOPEN.equals(code)
+                    || AppConstants.Permission.LULU_SCAN_RFID_SSCC_SKU_WEIGHT.equals(code)
+                    || AppConstants.Permission.LULU_VIEW_ONLY.equals(code)) permissions.add(code);
+            else throw new IllegalArgumentException("Invalid LULULEMON permission: " + code);
+        }
+        if (permissions.contains(AppConstants.Permission.LULU_VIEW_ONLY) && permissions.size() > 1)
+            throw new IllegalArgumentException("LULULEMON View Only cannot be combined with write permissions");
+        return new ArrayList<>(permissions);
+    }
+
+    private List<String> legacyLululemonPermissions() {
+        List<String> legacy = getAccessPermissions();
+        if (legacy.contains(AppConstants.Permission.VIEW_SYSTEM))
+            return List.of(AppConstants.Permission.LULU_VIEW_ONLY);
+        Set<String> mapped = new LinkedHashSet<>();
+        if (legacy.contains(AppConstants.Permission.SALES) || legacy.contains(AppConstants.Permission.ASSIGN_BARCODE))
+            mapped.add(AppConstants.Permission.LULU_UPLOAD_EDIT_DATA);
+        if (legacy.contains(AppConstants.Permission.SALES)) {
+            mapped.add(AppConstants.Permission.LULU_SHIPPING_SCHEDULER);
+            // Preserve Create for pre-migration Sales accounts; explicit Buyer grants remain opt-in.
+            mapped.add(AppConstants.Permission.LULU_SHIPPING_SCHEDULE_CREATE);
+        }
+        if (legacy.contains(AppConstants.Permission.WEIGHT_CHECK))
+            mapped.add(AppConstants.Permission.LULU_SCAN_RFID_SSCC_SKU_WEIGHT);
+        return new ArrayList<>(mapped);
+    }
+
+    public Map<String, List<String>> getBuyerAccessPermissions() {
+        if (buyerAccessPermissions == null) {
+            return canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                    ? Map.of(AppConstants.Buyer.LULULEMON, legacyLululemonPermissions()) : Map.of();
+        }
+        Map<String, List<String>> copy = new LinkedHashMap<>();
+        buyerAccessPermissions.forEach((buyer, permissions) -> {
+            if (canAccessBuyer(buyer)) copy.put(buyer, List.copyOf(permissions));
+        });
+        return copy;
+    }
+
+    public void setBuyerAccessPermissions(Map<String, List<String>> values) {
+        if (values == null) { buyerAccessPermissions = null; return; }
+        Map<String, List<String>> next = new LinkedHashMap<>();
+        values.forEach((buyer, permissions) -> {
+            String code = BuyerAccess.normalize(buyer);
+            if (!AppConstants.Buyer.LULULEMON.equals(code))
+                throw new IllegalArgumentException("Unknown Buyer-specific permission group: " + buyer);
+            if (!getBuyerPermissions().contains(code) && !isAdminRole())
+                throw new IllegalArgumentException("Buyer not assigned: " + code);
+            next.put(code, normalizeLululemonPermissions(permissions));
+        });
+        buyerAccessPermissions = next;
+    }
+
+    public void removeUnassignedBuyerAccessPermissions() {
+        if (buyerAccessPermissions != null)
+            buyerAccessPermissions.keySet().removeIf(code -> !isAdminRole() && !getBuyerPermissions().contains(code));
+    }
+
+    public boolean hasLululemonPermission(String permission) {
+        return isAdminRole() || (canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                && getBuyerAccessPermissions().getOrDefault(AppConstants.Buyer.LULULEMON, List.of()).contains(permission));
+    }
+    public boolean canLululemonUploadEdit() {
+        return hasLululemonPermission(AppConstants.Permission.LULU_UPLOAD_EDIT_DATA);
+    }
+    public boolean canLululemonShippingScheduler() {
+        return hasLululemonPermission(AppConstants.Permission.LULU_SHIPPING_SCHEDULER);
+    }
+    /** Independent permission: create a new Shipping Date, not edit existing dates or Submit. */
+    public boolean canLululemonCreateShippingSchedule() {
+        return hasLululemonPermission(AppConstants.Permission.LULU_SHIPPING_SCHEDULE_CREATE);
+    }
+    /** Independently assignable supervisor privilege; does not grant Schedule edit rights. */
+    public boolean canLululemonReopenShippingSchedule() {
+        return hasLululemonPermission(AppConstants.Permission.LULU_SHIPPING_SCHEDULE_REOPEN);
+    }
+    public boolean canLululemonScanWeight() {
+        return hasLululemonPermission(AppConstants.Permission.LULU_SCAN_RFID_SSCC_SKU_WEIGHT);
+    }
+    public boolean canLululemonRead() {
+        return isAdminRole() || (canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                && !getBuyerAccessPermissions().getOrDefault(AppConstants.Buyer.LULULEMON, List.of()).isEmpty());
+    }
+    public boolean hasAnyAccessForBuyer(String buyer) {
+        String code = BuyerAccess.normalize(buyer);
+        if (isAdminRole()) return true;
+        if (AppConstants.Buyer.LULULEMON.equals(code)) return canLululemonRead();
+        return canAccessBuyer(code) && !getAccessPermissions().isEmpty();
+    }
+
     public static String normalizeRole(String value) {
         if (value == null || value.trim().isEmpty()) {
             return AppConstants.Role.USER;
         }
 
         String normalized = value.trim().toUpperCase(Locale.ROOT);
-        if ("ROLE_ADMIN".equals(normalized) || AppConstants.Role.ADMIN.equals(normalized) || "ADMINISTRATOR".equals(normalized)) {
+        if (AppConstants.Role.SPRING_ADMIN.equals(normalized) || AppConstants.Role.ADMIN.equals(normalized) || AppConstants.Role.LEGACY_ADMINISTRATOR.equals(normalized)) {
             return AppConstants.Role.ADMIN;
         }
 
@@ -99,7 +213,7 @@ public class User {
 
     public static List<String> normalizeAccessPermissions(Collection<String> values, boolean admin) {
         if (admin) {
-            return List.of(AppConstants.Permission.SALES, AppConstants.Permission.ASSIGN_BARCODE, AppConstants.Permission.PICK_PO, AppConstants.Permission.ASSIGN_WEIGHT, AppConstants.Permission.WEIGHT_CHECK, AppConstants.Permission.BARCODE_OPERATOR, AppConstants.Permission.PRINT_ROOM);
+            return List.of(AppConstants.Permission.SALES, AppConstants.Permission.ASSIGN_BARCODE, AppConstants.Permission.PICK_PO, AppConstants.Permission.ASSIGN_WEIGHT, AppConstants.Permission.WEIGHT_CHECK, AppConstants.Permission.BARCODE_OPERATOR);
         }
 
         Set<String> normalized = new LinkedHashSet<>();
@@ -109,7 +223,7 @@ public class User {
                 String permission = value.trim().toUpperCase(Locale.ROOT);
                 if (AppConstants.Permission.SALES.equals(permission) || AppConstants.Permission.VIEW_SYSTEM.equals(permission)
                         || AppConstants.Permission.ASSIGN_BARCODE.equals(permission) || AppConstants.Permission.PICK_PO.equals(permission) || AppConstants.Permission.ASSIGN_WEIGHT.equals(permission) || AppConstants.Permission.WEIGHT_CHECK.equals(permission)
-                        || AppConstants.Permission.BARCODE_OPERATOR.equals(permission) || AppConstants.Permission.PRINT_ROOM.equals(permission)) {
+                        || AppConstants.Permission.BARCODE_OPERATOR.equals(permission)) {
                     normalized.add(permission);
                 }
             }
@@ -120,9 +234,12 @@ public class User {
             return List.of(AppConstants.Permission.VIEW_SYSTEM);
         }
 
-        // Existing users without an access list safely become view-only.
+        // An empty legacy access list remains view-only. A nonempty list containing
+        // only retired/unknown permission values must NOT gain VIEW_SYSTEM access.
         if (normalized.isEmpty()) {
-            return List.of(AppConstants.Permission.VIEW_SYSTEM);
+            return values == null || values.isEmpty()
+                    ? List.of(AppConstants.Permission.VIEW_SYSTEM)
+                    : List.of();
         }
 
         return new ArrayList<>(normalized);
@@ -156,10 +273,6 @@ public class User {
 
     public boolean canWeightCheck() {
         return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.WEIGHT_CHECK);
-    }
-
-    public boolean canPrintRoom() {
-        return isAdminRole() || getAccessPermissions().contains(AppConstants.Permission.PRINT_ROOM);
     }
 
     public boolean isViewOnly() {
@@ -281,6 +394,10 @@ public class User {
     }
 
     public void setAccessPermissions(List<String> accessPermissions) {
-        this.accessPermissions = new ArrayList<>(normalizeAccessPermissions(accessPermissions, isAdminRole()));
+        List<String> normalized = normalizeAccessPermissions(accessPermissions, isAdminRole());
+        if (!isAdminRole() && accessPermissions != null && !accessPermissions.isEmpty() && normalized.isEmpty()) {
+            throw new IllegalArgumentException("No valid access permission selected");
+        }
+        this.accessPermissions = new ArrayList<>(normalized);
     }
 }

@@ -34,6 +34,7 @@ public class UserService {
         dto.setEnabled(user.isEnabled());
         dto.setDepartmentId(user.getDepartmentId());
         dto.setAccessPermissions(user.getAccessPermissions());
+        dto.setBuyerAccessPermissions(user.getBuyerAccessPermissions());
         dto.setCanManageSales(user.canManageSales());
         dto.setCanAssignBarcode(user.canAssignBarcode());
         dto.setCanWeightCheck(user.canWeightCheck());

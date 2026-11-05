@@ -1,11 +1,13 @@
 package org.bsl.cartonloading.dto;
 
+import org.bsl.cartonloading.model.BuyerTypePermission;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Authentication/authorization payload required by the Carton Loading frontend. */
 public class UserDTO {
@@ -18,14 +20,19 @@ public class UserDTO {
     private boolean enabled;
     private String departmentId;
     private List<String> accessPermissions = new ArrayList<>();
+    private Map<String, List<String>> buyerAccessPermissions = Map.of();
+    public Map<String, List<String>> getBuyerAccessPermissions() { return buyerAccessPermissions; }
+    public void setBuyerAccessPermissions(Map<String, List<String>> values) {
+        buyerAccessPermissions = values == null ? Map.of() : Map.copyOf(values);
+    }
     private boolean canManageSales;
     private boolean canAssignBarcode;
     private boolean canWeightCheck;
     private boolean viewOnly;
     private List<String> buyerPermissions = new ArrayList<>();
-    private List<org.bsl.cartonloading.model.BuyerTypePermission> buyerTypePermissions = new ArrayList<>();
-    public List<org.bsl.cartonloading.model.BuyerTypePermission> getBuyerTypePermissions() { return List.copyOf(buyerTypePermissions); }
-    public void setBuyerTypePermissions(List<org.bsl.cartonloading.model.BuyerTypePermission> value) {
+    private List<BuyerTypePermission> buyerTypePermissions = new ArrayList<>();
+    public List<BuyerTypePermission> getBuyerTypePermissions() { return List.copyOf(buyerTypePermissions); }
+    public void setBuyerTypePermissions(List<BuyerTypePermission> value) {
         buyerTypePermissions = value == null ? new ArrayList<>() : new ArrayList<>(value);
     }
 
@@ -54,7 +61,10 @@ public class UserDTO {
 
     public List<String> getAccessPermissions() { return List.copyOf(accessPermissions); }
     public void setAccessPermissions(List<String> values) {
-        this.accessPermissions = new ArrayList<>(User.normalizeAccessPermissions(values, AppConstants.Role.ADMIN.equals(getRole())));
+        // Preserve explicit absence of valid permissions for an existing retired-only account.
+        this.accessPermissions = values != null && values.isEmpty()
+                ? new ArrayList<>()
+                : new ArrayList<>(User.normalizeAccessPermissions(values, AppConstants.Role.ADMIN.equals(getRole())));
     }
 
     public boolean isCanManageSales() { return canManageSales; }

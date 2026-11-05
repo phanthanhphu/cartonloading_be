@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.security;
 
+import org.bsl.cartonloading.model.SystemType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -50,7 +51,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     User user = userOpt.get();
                     String sessionBuyer = jwtUtil.getSelectedBuyer(token);
                     String sessionType = jwtUtil.getSelectedType(token);
-                    if (user.isEnabled() && jwtUtil.validateToken(token, user.getEmail(), user.getTokenVersion())
+                    if (user.isEnabled() && (user.hasAnyAccessForBuyer(sessionBuyer))
+                            && jwtUtil.validateToken(token, user.getEmail(), user.getTokenVersion())
                             && !sessionBuyer.isEmpty() && !sessionType.isEmpty()
                             && buyerService.supportsType(sessionBuyer, sessionType)
                             && user.canAccessBuyerType(sessionBuyer, sessionType)) {
@@ -93,15 +95,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 String pathBuyer = BuyerAccess.normalize(segment);
                 if (!pathBuyer.equals(buyer)) return false;
                 if (path.contains("/lululemon/") && !(AppConstants.Buyer.LULULEMON.equals(buyer)
-                        && org.bsl.cartonloading.model.SystemType.RFID.equals(type))) return false;
+                        && SystemType.RFID.equals(type))) return false;
                 if ((path.contains("/packing/") || path.contains("/factory-barcodes") || path.contains("/scale-stations")
                         || path.contains("/shipment-management") || path.contains("/sales/shipments") || path.contains("/packing-orders")
                         || path.endsWith("/orders")) && AppConstants.Buyer.ENGELBERT_STRAUSS.equals(buyer)
-                        && !org.bsl.cartonloading.model.SystemType.FACTORY_USE_ONLY.equals(type)) return false;
+                        && !SystemType.FACTORY_USE_ONLY.equals(type)) return false;
             }
         }
         if (path.startsWith("/api/carton-loading")) return AppConstants.Buyer.ENGELBERT_STRAUSS.equals(buyer)
-                && org.bsl.cartonloading.model.SystemType.FACTORY_USE_ONLY.equals(type);
+                && SystemType.FACTORY_USE_ONLY.equals(type);
         if (path.startsWith("/api/order-management/")) {
             String requestedBuyer = request.getParameter("buyer");
             return requestedBuyer != null && buyer.equals(BuyerAccess.normalize(requestedBuyer));

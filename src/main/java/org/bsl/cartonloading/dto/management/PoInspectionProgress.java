@@ -20,10 +20,10 @@ public record PoInspectionProgress(
 ) {
     public static PoInspectionProgress fromCartons(PurchaseOrder po, List<Carton> cartons) {
         return fromCounts(po, cartons.size(),
-                (int) cartons.stream().filter(c -> "PASS".equals(c.getRfidStatus())).count(),
+                (int) cartons.stream().filter(c -> AppConstants.RfidCheck.PASS.equals(c.getRfidStatus())).count(),
                 (int) cartons.stream().filter(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())).count(),
-                (int) cartons.stream().filter(c -> "FAILED".equals(c.getRfidStatus())).count(),
-                (int) cartons.stream().filter(c -> AppConstants.WeightStatus.FAILED.equals(c.getWeightStatus()) || "HOLD".equals(c.getWeightStatus())).count());
+                (int) cartons.stream().filter(c -> AppConstants.RfidCheck.FAILED.equals(c.getRfidStatus())).count(),
+                (int) cartons.stream().filter(c -> AppConstants.WeightStatus.FAILED.equals(c.getWeightStatus()) || AppConstants.WeightStatus.HOLD.equals(c.getWeightStatus())).count());
     }
 
     public static PoInspectionProgress fromCounts(PurchaseOrder po, int generated, int rfidPassed, int weightPassed,

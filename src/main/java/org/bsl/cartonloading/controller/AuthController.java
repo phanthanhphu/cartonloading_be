@@ -1,6 +1,7 @@
 package org.bsl.cartonloading.controller;
 
 import org.bsl.cartonloading.common.constants.AppMessages;
+import org.bsl.cartonloading.buyers.core.BuyerWorkflowRegistry;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
 import org.bsl.cartonloading.model.SystemType;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 
 @RestController
@@ -22,12 +24,14 @@ public class AuthController {
     private final JwtUtil jwtUtil;
     private final PasswordEncoder passwordEncoder;
     private final BuyerService buyerService;
+    private final BuyerWorkflowRegistry workflowRegistry;
 
-    public AuthController(UserService userService, JwtUtil jwtUtil, PasswordEncoder passwordEncoder, BuyerService buyerService) {
+    public AuthController(UserService userService, JwtUtil jwtUtil, PasswordEncoder passwordEncoder, BuyerService buyerService, BuyerWorkflowRegistry workflowRegistry) {
         this.userService = userService;
         this.jwtUtil = jwtUtil;
         this.passwordEncoder = passwordEncoder;
         this.buyerService = buyerService;
+        this.workflowRegistry = workflowRegistry;
     }
 
     @PostMapping("/login")
@@ -50,7 +54,6 @@ public class AuthController {
         if (user.getPassword() == null || !passwordEncoder.matches(password, user.getPassword())) {
             return ResponseEntity.status(401).body(Map.of("message", AppMessages.INVALID_CREDENTIALS));
         }
-
         String selectedBuyer = BuyerAccess.normalize(loginRequest.getBuyerCode());
         if (selectedBuyer.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("message", AppMessages.SELECT_VALID_BUYER));
@@ -62,15 +65,18 @@ public class AuthController {
             return ResponseEntity.status(403)
                     .body(Map.of("message", AppMessages.SELECTED_BUYER_ACCESS_DENIED));
         }
+        if (!user.hasAnyAccessForBuyer(selectedBuyer)) {
+            return ResponseEntity.status(403).body(Map.of("message", "No active permissions for selected Buyer. Contact administrator."));
+        }
 
         String selectedType = SystemType.normalize(loginRequest.getSystemType());
         if (selectedType.isEmpty()) return ResponseEntity.badRequest().body(Map.of("message", "Please select a valid system Type"));
         if (!buyerService.supportsType(selectedBuyer, selectedType))
             return ResponseEntity.status(403).body(Map.of("message", "Buyer " + selectedBuyer + " does not support " + selectedType));
-        if (!SystemType.hasImplementedWorkflow(selectedBuyer, selectedType))
+        if (!workflowRegistry.hasImplementedWorkflow(selectedBuyer, selectedType))
             return ResponseEntity.status(403).body(Map.of("message", "This Buyer / Type workflow has not been implemented yet"));
         if (!user.canAccessBuyerType(selectedBuyer, selectedType))
-            return ResponseEntity.status(403).body(Map.of("message", "Bạn không có quyền truy cập Buyer " + selectedBuyer + " với Type " + selectedType));
+            return ResponseEntity.status(403).body(Map.of("message", "You do not have access to Buyer " + selectedBuyer + " with Type " + selectedType));
 
         String token = jwtUtil.generateToken(
                 user.getEmail(),
@@ -86,6 +92,28 @@ public class AuthController {
         response.put("selectedBuyer", selectedBuyer);
         response.put("selectedType", selectedType);
         return ResponseEntity.ok(response);
+    }
+
+    /** Read-only revoke notice. Works with signed, unexpired stale JWTs so a disconnected client can show the reason. */
+    @GetMapping("/account-change")
+    public ResponseEntity<?> accountChange(@org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) return ResponseEntity.status(401).build();
+        String token = authorization.substring(7).trim();
+        if (!jwtUtil.validateToken(token)) return ResponseEntity.status(401).build();
+        String email = jwtUtil.getEmailFromToken(token);
+        if (email == null) return ResponseEntity.status(401).build();
+        User user = userService.findByEmail(email).orElse(null);
+        if (user == null) return ResponseEntity.ok(Map.of("changed", true, "enabled", false,
+                "details", List.of("This account no longer exists or its email address has changed")));
+        long claimedVersion = jwtUtil.getTokenVersionFromToken(token);
+        if (claimedVersion == user.getTokenVersion() && user.isEnabled()) return ResponseEntity.ok(Map.of("changed", false));
+        List<String> details = user.getLastAccessChangeVersion() > claimedVersion
+                ? user.getLastAccessChangeDetails() : List.of();
+        if (details.isEmpty()) details = List.of(user.isEnabled()
+                ? "Your access permissions or account details have been updated"
+                : "Your account has been disabled");
+        return ResponseEntity.ok(Map.of("changed", true, "userId", user.getId(),
+                "version", user.getTokenVersion(), "enabled", user.isEnabled(), "details", details));
     }
 
     public static class LoginRequest {

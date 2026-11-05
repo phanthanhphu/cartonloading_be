@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.buyers.es.dto;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import java.time.LocalDate;
@@ -8,8 +9,8 @@ import java.time.LocalDateTime;
 public record PackingOrderResponse(
         String id,
         String buyerCode,
-        @JsonFormat(pattern = "yyyy-MM-dd") LocalDate orderDate,
-        @JsonFormat(pattern = "yyyy-MM-dd") LocalDate endOrderDate,
+        @JsonFormat(pattern = AppConstants.DatePattern.DATE) LocalDate orderDate,
+        @JsonFormat(pattern = AppConstants.DatePattern.DATE) LocalDate endOrderDate,
         String orderName,
         String supplierName,
         String supplierNumber,
@@ -30,8 +31,8 @@ public record PackingOrderResponse(
         long notWeighedCartonCount,
         String createdBy,
         String updatedBy,
-        @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss") LocalDateTime createdAt,
-        @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss") LocalDateTime updatedAt,
+        @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME) LocalDateTime createdAt,
+        @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME) LocalDateTime updatedAt,
         String factoryCode
 ) {
 }

@@ -16,11 +16,13 @@ import org.bsl.cartonloading.buyers.lululemon.model.CartonItem;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession;
 import org.bsl.cartonloading.buyers.lululemon.service.TrueVueDecoder;
+import org.bsl.cartonloading.buyers.lululemon.service.RfidScanIssueCounts;
 import org.bsl.cartonloading.buyers.lululemon.service.CartonScanProgress;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonItemRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
 import org.bsl.cartonloading.buyers.lululemon.service.WorkflowService;
+import org.bsl.cartonloading.buyers.lululemon.service.LululemonOrderCascadeDeleteService;
 import org.bsl.cartonloading.dto.management.CartonManagementRow;
 import org.bsl.cartonloading.dto.management.ItemManagementRow;
 import org.bsl.cartonloading.dto.management.PoManagementRow;
@@ -54,12 +56,15 @@ public class OrderManagementService {
     private final AuditLogService audit;
     private final BuyerRepository buyers;
     private final MongoTemplate mongo;
+    private final SelectedFactoryScope factoryScope;
+    private final LululemonOrderCascadeDeleteService cascadeDelete;
 
     public OrderManagementService(PackingOrderService orders, PackingListLineRepository packingLines,
                                   PackingAllocationLineRepository allocationLines, CartonScanTransactionRepository scanTransactions,
                                   PurchaseOrderRepository purchaseOrders, CartonRepository ssccCartons,
                                   CartonItemRepository cartonItems, WorkflowService ssccWorkflow,
-                                  AuditLogService audit, BuyerRepository buyers, MongoTemplate mongo) {
+                                  AuditLogService audit, BuyerRepository buyers, MongoTemplate mongo, SelectedFactoryScope factoryScope,
+                                  LululemonOrderCascadeDeleteService cascadeDelete) {
         this.orders = orders;
         this.packingLines = packingLines;
         this.allocationLines = allocationLines;
@@ -71,22 +76,38 @@ public class OrderManagementService {
         this.audit = audit;
         this.buyers = buyers;
         this.mongo = mongo;
+        this.factoryScope = factoryScope;
+        this.cascadeDelete = cascadeDelete;
     }
 
     public Page<PackingOrderResponse> listOrders(String buyer, java.time.LocalDate orderDate, String orderName,
                                                         String factory, String supplier, String createdBy, String status,
                                                         int page, int size) {
-        return orders.list(requiredBuyer(buyer), null, orderDate, orderName, supplier, factory, createdBy, status, null, null, page, size);
+        String code = requiredBuyer(buyer);
+        return orders.list(code, null, orderDate, orderName, supplier,
+                factoryScope.constrain(code, factory), createdBy, status, null, null, page, size);
     }
 
     public PackingOrderResponse getOrder(String buyer, String id) {
-        return orders.getResponse(requiredBuyer(buyer), id);
+        String code = requiredBuyer(buyer);
+        PackingOrderResponse result = orders.getResponse(code, id);
+        // A bookmarked URL must not expose an Order belonging to another Factory.
+        // Legacy UNASSIGNED Orders remain accessible to authorized Admin workflows.
+        if (AppConstants.Buyer.LULULEMON.equals(code)
+                && result.factoryCode() != null && !result.factoryCode().isBlank()) {
+            factoryScope.assertMatches(factoryScope.requested(code), result.factoryCode());
+        }
+        return result;
+    }
+
+    public boolean isOrderNameTaken(String buyer, String factoryCode, String orderName, String excludeOrderId) {
+        return orders.duplicateOrderName(requiredBuyer(buyer), factoryCode, orderName, excludeOrderId);
     }
 
     public PackingOrderResponse createOrder(String buyer, PackingOrderRequest request) {
         String code = requiredBuyer(buyer);
         PackingOrderResponse saved = orders.create(code, request);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.ORDER, saved.id(), AppMessages.orderCreatedAudit(saved.orderName(), code), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.ORDER, saved.id(), AppMessages.orderCreatedAudit(saved.orderName(), code), code, saved.factoryCode(), null, saved, null, null);
         return saved;
     }
 
@@ -110,18 +131,33 @@ public class OrderManagementService {
                 }
             }
         }
+        PackingOrderResponse before = orders.getResponse(code, id);
         PackingOrderResponse saved = orders.update(code, id, request);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.ORDER, id, AppMessages.orderUpdatedAudit(saved.orderName(), code), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.ORDER, id, AppMessages.orderUpdatedAudit(saved.orderName(), code), code, java.util.Objects.equals(before.factoryCode(), saved.factoryCode()) ? saved.factoryCode() : null, before, saved, null, null);
         return saved;
     }
 
-    public void deleteOrder(String buyer, String id) {
+    public void deleteOrder(String buyer, String id, String confirmation) {
         String code = requiredBuyer(buyer);
-        if (AppConstants.Buyer.LULULEMON.equals(code) && !purchaseOrders.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(id, code).isEmpty()) {
-            throw new IllegalArgumentException(AppMessages.ORDER_WITH_PO_DATA_DELETE_BLOCKED);
+        PackingOrderResponse before = orders.getResponse(code, id);
+        if (AppConstants.Buyer.LULULEMON.equals(code)) {
+            // The shared controller has no Buyer-specific deletion logic.
+            // Empty Orders retain the existing Sales delete permission; Orders
+            // with dependent data require an Admin and a typed confirmation.
+            PackingOrderResponse order = getOrder(code, id);
+            if (cascadeDelete.hasOrderData(id)) {
+                cascadeDelete.deleteAll(id, order.orderName(), confirmation);
+            } else {
+                if (AppConstants.OrderDeletion.DELETING.equals(orders.getEntity(code, id).getDeletionState())) {
+                    cascadeDelete.deleteAll(id, order.orderName(), confirmation);
+                } else {
+                    orders.delete(code, id);
+                }
+            }
+        } else {
+            orders.delete(code, id); // ES retains its existing operational protections.
         }
-        orders.delete(code, id);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.ORDER, id, AppMessages.orderDeletedAudit(code), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.ORDER, id, AppMessages.orderDeletedAudit(code), code, before.factoryCode(), before, null, null, null);
     }
 
     public Page<PoManagementRow> listPos(String buyer, String orderId, String poNumber, String factory,
@@ -134,6 +170,7 @@ public class OrderManagementService {
         int safeSize = Math.max(1, Math.min(size, 200));
 
         if (AppConstants.Buyer.LULULEMON.equals(code)) {
+            final String activeFactory = factoryScope.constrain(code, factory);
             String normalizedInspection = inspectionStatus == null ? "" : inspectionStatus.trim().toUpperCase(Locale.ROOT);
             if (!Set.of("", "COMPLETED", "INCOMPLETE", "IMPORTING", "NOT_STARTED").contains(normalizedInspection)) {
                 throw new IllegalArgumentException("Invalid inspection status filter.");
@@ -148,14 +185,14 @@ public class OrderManagementService {
                     .filter(po -> clean(qty) == null || po.getTotalQty() != null
                             && matches(String.valueOf(po.getTotalQty()), qty.replace(",", "")))
                     .filter(po -> matchesAnyPoField(po, search))
-                    .filter(po -> matches(po.getFactoryCode(), factory))
+                    .filter(po -> factoryScope.matches(activeFactory, po.getFactoryCode()))
                     .filter(po -> matches(po.getStyleNumber(), style))
                     .filter(po -> matches(po.getSku(), sku))
                     .filter(po -> matches(po.getDestination(), destination))
                     .filter(po -> matches(po.getStatus(), status))
                     .filter(po -> exFtyDate == null || exFtyDate.equals(po.getExFtyDate()))
                     .filter(po -> shippingScheduled == null
-                            || shippingScheduled.equals(po.getPlannedShippingDate() != null))
+                            || shippingScheduled.equals(po.getPlannedShippingDate() != null || po.getShippingDates() != null && !po.getShippingDates().isEmpty()))
                     .filter(po -> normalizedInspection.isEmpty()
                             || "NOT_STARTED".equals(normalizedInspection) && AppConstants.PurchaseOrderStatus.NOT_STARTED.equals(po.getStatus())
                             || !"NOT_STARTED".equals(normalizedInspection) && normalizedInspection.equals(progressFromCounts(po,
@@ -212,12 +249,67 @@ public class OrderManagementService {
         return page(rows, safePage, safeSize);
     }
 
+    /**
+     * Read-only, date-scoped version of the All POs table for Shipping Schedule details.
+     * Membership is checked before pagination; carton progress is generated using the
+     * exact same purchaseOrderRow projection as All POs (only for the visible page).
+     * This does not modify POs, cartons, Shipping Dates, or the existing All POs API.
+     */
+    public Page<PoManagementRow> listShippingSchedulePos(String buyer, String orderId,
+            String factory, java.time.LocalDate shippingDate, String poNumber, String factoryFilter, String style,
+            String sku, String destination, String status, java.time.LocalDate exFtyDate,
+            String inspectionStatus, int page, int size) {
+        String code = requiredBuyer(buyer);
+        if (!AppConstants.Buyer.LULULEMON.equals(code)) {
+            throw new IllegalArgumentException("Shipping Schedule PO table is available for LULULEMON only.");
+        }
+        orders.getEntity(code, orderId);
+        if (shippingDate == null) throw new IllegalArgumentException("Shipping Date is required.");
+        String activeFactory = factoryScope.constrain(code, factory);
+        String normalizedInspection = inspectionStatus == null ? "" : inspectionStatus.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("", "COMPLETED", "INCOMPLETE", "IMPORTING", "NOT_STARTED").contains(normalizedInspection)) {
+            throw new IllegalArgumentException("Invalid inspection status filter.");
+        }
+        Map<String, InspectionCounts> inspectionCounts = normalizedInspection.isEmpty() || "NOT_STARTED".equals(normalizedInspection)
+                ? Map.of() : loadInspectionCounts(orderId, code);
+        List<PurchaseOrder> matched = purchaseOrders.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, code).stream()
+                .filter(po -> factoryScope.matches(activeFactory, po.getFactoryCode()))
+                .filter(po -> (po.getShippingDates() != null && po.getShippingDates().contains(shippingDate))
+                        || shippingDate.equals(po.getPlannedShippingDate()))
+                .filter(po -> matches(po.getPoNumber(), poNumber))
+                .filter(po -> matches(po.getFactoryCode(), factoryFilter))
+                .filter(po -> matches(po.getStyleNumber(), style))
+                .filter(po -> matches(po.getSku(), sku))
+                .filter(po -> matches(po.getDestination(), destination))
+                .filter(po -> matches(po.getStatus(), status))
+                .filter(po -> exFtyDate == null || exFtyDate.equals(po.getExFtyDate()))
+                .filter(po -> normalizedInspection.isEmpty()
+                        || "NOT_STARTED".equals(normalizedInspection) && AppConstants.PurchaseOrderStatus.NOT_STARTED.equals(po.getStatus())
+                        || !"NOT_STARTED".equals(normalizedInspection) && normalizedInspection.equals(progressFromCounts(po,
+                            inspectionCounts.getOrDefault(po.getId(), InspectionCounts.EMPTY)).status()))
+                .sorted(Comparator.comparing(PurchaseOrder::getPoNumber,
+                        Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
+                .toList();
+        Pageable pageable = PageRequest.of(Math.max(0, page), Math.max(1, Math.min(size, 200)));
+        int start = (int) Math.min(pageable.getOffset(), matched.size());
+        List<PurchaseOrder> displayed = matched.subList(start, Math.min(start + pageable.getPageSize(), matched.size()));
+        List<String> ids = displayed.stream().map(PurchaseOrder::getId).toList();
+        Map<String, List<Carton>> cartonsByPo = ids.isEmpty() ? Map.of() : ssccCartons.findByPoIdIn(ids).stream()
+                .filter(carton -> Objects.equals(orderId, carton.getOrderId()) && Objects.equals(code, carton.getBuyerCode()))
+                .collect(Collectors.groupingBy(Carton::getPoId));
+        return new PageImpl<>(displayed.stream()
+                .map(po -> purchaseOrderRow(po, cartonsByPo.getOrDefault(po.getId(), List.of())))
+                .toList(), pageable, matched.size());
+    }
+
     public PoManagementRow getPo(String buyer, String orderId, String poKey) {
         String code = requiredBuyer(buyer);
         orders.getEntity(code, orderId);
         if (AppConstants.Buyer.LULULEMON.equals(code)) {
+            String activeFactory = factoryScope.requested(code);
             return purchaseOrders.findByIdAndOrderIdAndBuyerCode(poKey, orderId, code)
-                    .map(po -> purchaseOrderRow(po, ssccCartons.findByPoIdOrderByCartonNoAsc(po.getId())))
+                    .map(po -> { factoryScope.assertMatches(activeFactory, po.getFactoryCode());
+                        return purchaseOrderRow(po, ssccCartons.findByPoIdOrderByCartonNoAsc(po.getId())); })
                     .orElseThrow(() -> new IllegalArgumentException(AppMessages.PO_NOT_FOUND));
         }
         requireBarcodePackingWorkflow(code);
@@ -234,6 +326,9 @@ public class OrderManagementService {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(1, Math.min(size, 200));
         if (AppConstants.Buyer.LULULEMON.equals(code)) {
+            PurchaseOrder parentPo = purchaseOrders.findByIdAndOrderIdAndBuyerCode(poKey, orderId, code)
+                    .orElseThrow(() -> new IllegalArgumentException(AppMessages.PO_NOT_FOUND));
+            factoryScope.assertMatches(factoryScope.requested(code), parentPo.getFactoryCode());
             ssccWorkflow.ensureCartonsForPo(code, orderId, poKey);
             // Filter and paginate cartons first: only read RFID sessions for the visible page.
             // Crucially, the stored carton.rfidVerifiedQty represents *all* unique TrueVUE
@@ -277,6 +372,12 @@ public class OrderManagementService {
         if (AppConstants.Buyer.LULULEMON.equals(code)) {
             Carton carton = ssccCartons.findByIdAndOrderIdAndBuyerCode(cartonId, orderId, code)
                     .orElseThrow(() -> new IllegalArgumentException(AppMessages.CARTON_NOT_FOUND));
+            String cartonFactory = carton.getFactoryCode();
+            if (cartonFactory == null || cartonFactory.isBlank()) {
+                cartonFactory = purchaseOrders.findByIdAndOrderIdAndBuyerCode(carton.getPoId(), orderId, code)
+                        .map(PurchaseOrder::getFactoryCode).orElse(null);
+            }
+            factoryScope.assertMatches(factoryScope.requested(code), cartonFactory);
             RfidScanSession session = carton.getRfidSessionId() == null ? null
                     : mongo.findById(carton.getRfidSessionId(), RfidScanSession.class);
             return ssccCartonRow(carton, session);
@@ -299,6 +400,14 @@ public class OrderManagementService {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(1, Math.min(size, 200));
         if (AppConstants.Buyer.LULULEMON.equals(code)) {
+            Carton parentCarton = ssccCartons.findByIdAndOrderIdAndBuyerCode(cartonId, orderId, code)
+                    .orElseThrow(() -> new IllegalArgumentException(AppMessages.CARTON_NOT_FOUND));
+            String cartonFactory = parentCarton.getFactoryCode();
+            if (cartonFactory == null || cartonFactory.isBlank()) {
+                cartonFactory = purchaseOrders.findByIdAndOrderIdAndBuyerCode(parentCarton.getPoId(), orderId, code)
+                        .map(PurchaseOrder::getFactoryCode).orElse(null);
+            }
+            factoryScope.assertMatches(factoryScope.requested(code), cartonFactory);
             ssccWorkflow.ensureItemsForCarton(code, orderId, cartonId);
             // CartonItem stores physical scan state, not the imported product attributes.
             // Join the carton to its exact PO once (not once per item, and not by PO number)
@@ -351,9 +460,9 @@ public class OrderManagementService {
                 Aggregation.match(Criteria.where("orderId").is(orderId).and("buyerCode").is(buyerCode)),
                 Aggregation.group("poId")
                         .count().as("generated")
-                        .sum(ConditionalOperators.when(Criteria.where("rfidStatus").is("PASS")).then(1).otherwise(0)).as("rfidPass")
+                        .sum(ConditionalOperators.when(Criteria.where("rfidStatus").is(AppConstants.RfidCheck.PASS)).then(1).otherwise(0)).as("rfidPass")
                         .sum(ConditionalOperators.when(Criteria.where("weightStatus").is(AppConstants.WeightStatus.PASS)).then(1).otherwise(0)).as("weightPass")
-                        .sum(ConditionalOperators.when(Criteria.where("rfidStatus").is("FAILED")).then(1).otherwise(0)).as("rfidFail")
+                        .sum(ConditionalOperators.when(Criteria.where("rfidStatus").is(AppConstants.RfidCheck.FAILED)).then(1).otherwise(0)).as("rfidFail")
                         .sum(ConditionalOperators.when(Criteria.where("weightStatus").in(AppConstants.WeightStatus.FAILED, "HOLD")).then(1).otherwise(0)).as("weightFail")
         );
         Map<String, InspectionCounts> counts = new HashMap<>();
@@ -378,8 +487,10 @@ public class OrderManagementService {
             throw new IllegalArgumentException("Inspection summary is available for LULULEMON only.");
         }
         orders.getEntity(code, orderId);
+        String activeFactory = factoryScope.requested(code);
         List<PurchaseOrder> scheduled = purchaseOrders.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, code)
-                .stream().filter(po -> po.getPlannedShippingDate() != null).toList();
+                .stream().filter(po -> po.getPlannedShippingDate() != null)
+                .filter(po -> factoryScope.matches(activeFactory, po.getFactoryCode())).toList();
         Map<String, InspectionCounts> counts = loadInspectionCounts(orderId, code);
         long completed = 0, pendingRfid = 0, pendingWeight = 0, pendingBoth = 0, rfidFailed = 0, weightFailed = 0;
         for (PurchaseOrder po : scheduled) {
@@ -458,7 +569,7 @@ public class OrderManagementService {
                 }
             }
             matched = matchedCount;
-            wrongSku = wrongCount;
+            wrongSku = RfidScanIssueCounts.withUnsupported(wrongCount, session.getInvalidReads());
         }
         return new CartonManagementRow(c.getId(), c.getOrderId(), c.getBuyerCode(), c.getPoId(), c.getCartonNo(), c.getStatus(), c.getSscc18(),
                 c.getPlannedQty(), c.getScannedQty(), c.getActualWeightKg(), c.getWeightStatus(),

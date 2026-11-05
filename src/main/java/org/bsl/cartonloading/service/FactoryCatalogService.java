@@ -47,8 +47,8 @@ public class FactoryCatalogService {
         f.setActive(Boolean.TRUE.equals(request.active()));
         f.setCreatedAt(LocalDateTime.now()); f.setUpdatedAt(f.getCreatedAt());
         Factory saved = repository.save(f);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.FACTORY,
-                saved.getId(), "Factory " + code, null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.FACTORY,
+                saved.getId(), "Factory " + code, AppConstants.Buyer.LULULEMON, code, null, saved, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.FACTORY, AppConstants.AuditAction.CREATE);
         return saved;
     }
@@ -56,12 +56,14 @@ public class FactoryCatalogService {
         Factory f = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Factory not found"));
         if (!FactoryCodes.requireValid(request.code()).equals(f.getCode()))
             throw new IllegalArgumentException("Factory Code is immutable (used by operational history)");
+        java.util.Map<String, Object> before = audit.snapshot(f);
         f.setName(request.name().trim());
         if (request.active() != null) f.setActive(request.active());
         f.setUpdatedAt(LocalDateTime.now());
         Factory saved = repository.save(f);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.FACTORY,
-                saved.getId(), "Factory " + f.getCode() + " active=" + f.isActive(), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.FACTORY,
+                saved.getId(), "Factory " + f.getCode() + " active=" + f.isActive(), AppConstants.Buyer.LULULEMON,
+                f.getCode(), before, saved, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.FACTORY, AppConstants.AuditAction.UPDATE);
         return saved;
     }

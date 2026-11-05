@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 
 /** An immutable factory-scoped import receipt, not a copy of the uploaded binary. */
 @Data
-@Document(collection = "lululemon_packing_import_batches")
+@Document(collection = AppConstants.Collection.PACKING_IMPORT_BATCHES)
 public class PackingImportBatch {
     @Id private String id;
     private String buyerCode = AppConstants.Buyer.LULULEMON;

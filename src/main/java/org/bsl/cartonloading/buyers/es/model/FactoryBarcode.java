@@ -27,7 +27,7 @@ public class FactoryBarcode {
 
     private Integer printCount = 0;
     private String lastPrintedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime lastPrintedAt;
 
     /** Assignment snapshot for quick traceability/search. */
@@ -49,17 +49,17 @@ public class FactoryBarcode {
     /** Actual quantity in this physical carton (important for partial last cartons). */
     private String assignedQuantity;
     private String assignedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime assignedAt;
 
     private String voidReason;
     private String voidBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime voidAt;
 
     private String createdBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
 }

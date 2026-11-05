@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.config;
 
+import org.bsl.cartonloading.dto.ApiError;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.StringHttpMessageConverter;
@@ -27,8 +28,8 @@ class ApiErrorNormalizerAdviceTest {
         assertSame(body, write(body, response(200)));
     }
     @Test void keepsFieldErrorsForDtoModel() {
-        org.bsl.cartonloading.dto.ApiError body =
-                new org.bsl.cartonloading.dto.ApiError(400, "Invalid input");
+        ApiError body =
+                new ApiError(400, "Invalid input");
         body.setFieldErrors(Map.of("quantity", "must be positive"));
         Map<?, ?> result = (Map<?, ?>) write(body, response(400));
         assertEquals(body.getFieldErrors(), result.get("fieldErrors"));

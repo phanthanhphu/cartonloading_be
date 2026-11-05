@@ -12,6 +12,7 @@ import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
 import org.bsl.cartonloading.service.FactoryCatalogService;
+import org.bsl.cartonloading.service.SelectedFactoryScope;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -35,6 +36,7 @@ public class ShippingScheduleService {
     private final WeighingService weighingService;
     private final AuditLogService auditLogService;
     private final FactoryCatalogService factories;
+    private final SelectedFactoryScope selectedFactoryScope;
 
     public ShippingScheduleService(
             ShippingScheduleRepository scheduleRepository,
@@ -45,7 +47,8 @@ public class ShippingScheduleService {
             BuyerFactoryAccessService factoryAccess,
             WeighingService weighingService,
             AuditLogService auditLogService,
-            FactoryCatalogService factories
+            FactoryCatalogService factories,
+            SelectedFactoryScope selectedFactoryScope
     ) {
         this.scheduleRepository = scheduleRepository;
         this.poRepository = poRepository;
@@ -56,13 +59,16 @@ public class ShippingScheduleService {
         this.weighingService = weighingService;
         this.auditLogService = auditLogService;
         this.factories = factories;
+        this.selectedFactoryScope = selectedFactoryScope;
     }
 
     public List<ShippingScheduleSummary> list(String buyerCode, String orderId) {
         requireOrder(buyerCode, orderId);
+        String activeFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         return scheduleRepository
                 .findByOrderIdAndBuyerCodeOrderByExFtyDateAscCreatedAtDesc(orderId, AppConstants.Buyer.LULULEMON)
                 .stream()
+                .filter(schedule -> selectedFactoryScope.matches(activeFactory, schedule.getFactoryCode()))
                 // Sales/Admin see every schedule. Operational users only see schedules
                 // explicitly assigned to one of their Factory permissions (F1/F2/...).
                 .filter(schedule -> factoryAccess.canAccessAssignedFactory(schedule.getFactoryCode())
@@ -73,6 +79,7 @@ public class ShippingScheduleService {
     public ShippingScheduleDetail detail(String buyerCode, String orderId, String scheduleId) {
         requireOrder(buyerCode, orderId);
         ShippingSchedule schedule = requireSchedule(orderId, scheduleId);
+        selectedFactoryScope.assertMatches(selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON), schedule.getFactoryCode());
         if (!factoryAccess.canAccessAssignedFactory(schedule.getFactoryCode())
                 && !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) {
             throw new org.springframework.security.access.AccessDeniedException("Factory access denied");
@@ -332,6 +339,7 @@ public class ShippingScheduleService {
     public List<WeighingResult> weightHistory(String buyerCode, String orderId, String scheduleId) {
         requireOrder(buyerCode, orderId);
         ShippingSchedule schedule = requireSchedule(orderId, scheduleId);
+        selectedFactoryScope.assertMatches(selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON), schedule.getFactoryCode());
         if (!factoryAccess.canAccessAssignedFactory(schedule.getFactoryCode())
                 && !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) {
             throw new org.springframework.security.access.AccessDeniedException("Factory access denied");
@@ -367,7 +375,7 @@ public class ShippingScheduleService {
             int finished = (int) cartons.stream().filter(c -> CartonWeightReadiness.isReady(po, c)).count();
             int assigned = (int) cartons.stream().filter(c -> clean(c.getSscc()) != null).count();
             int pass = (int) cartons.stream().filter(c -> AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())).count();
-            int failed = (int) cartons.stream().filter(c -> AppConstants.WeightStatus.FAILED.equals(c.getWeightStatus()) || "HOLD".equals(c.getWeightStatus())).count();
+            int failed = (int) cartons.stream().filter(c -> AppConstants.WeightStatus.FAILED.equals(c.getWeightStatus()) || AppConstants.WeightStatus.HOLD.equals(c.getWeightStatus())).count();
             int remaining = Math.max(0, cartons.size() - pass - failed);
             boolean skuAssigned = clean(po.getSku()) != null;
             boolean ready = skuAssigned && !cartons.isEmpty() && finished == cartons.size() && assigned == cartons.size();
@@ -453,7 +461,12 @@ public class ShippingScheduleService {
     }
 
     private void audit(String action, String resourceId, String description) {
-        auditLogService.log(RequestActor.current(), action, AppConstants.AuditResource.SHIPPING_SCHEDULE, resourceId, description, null, null);
+        ShippingSchedule current = scheduleRepository.findById(resourceId).orElse(null);
+        auditLogService.logChange(RequestActor.current(), action, AppConstants.AuditResource.SHIPPING_SCHEDULE,
+                resourceId, description, AppConstants.Buyer.LULULEMON,
+                current == null ? null : current.getFactoryCode(), null,
+                current == null ? null : java.util.Map.of("scheduleNo", String.valueOf(current.getScheduleNo()),
+                    "status", String.valueOf(current.getStatus()), "factoryCode", String.valueOf(current.getFactoryCode())), null, null);
     }
 
     private String logicalPoLabel(PurchaseOrder po) {

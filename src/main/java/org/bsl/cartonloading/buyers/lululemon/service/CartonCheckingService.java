@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
+import org.bsl.cartonloading.common.exception.WorkflowNotFoundException;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
 import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
 import org.bsl.cartonloading.buyers.lululemon.dto.CheckingResultRequest;
@@ -14,6 +15,7 @@ import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
+import org.bsl.cartonloading.service.SelectedFactoryScope;
 import org.springframework.stereotype.Service;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -33,19 +35,22 @@ public class CartonCheckingService {
     private final CartonCheckingRepository checkingRepository;
     private final BuyerFactoryAccessService factoryAccess;
     private final AuditLogService auditLogService;
+    private final SelectedFactoryScope selectedFactoryScope;
 
     public CartonCheckingService(PackingOrderService orderService,
                                  PurchaseOrderRepository poRepository,
                                  CartonRepository cartonRepository,
                                  CartonCheckingRepository checkingRepository,
                                  BuyerFactoryAccessService factoryAccess,
-                                 AuditLogService auditLogService) {
+                                 AuditLogService auditLogService,
+                                 SelectedFactoryScope selectedFactoryScope) {
         this.orderService = orderService;
         this.poRepository = poRepository;
         this.cartonRepository = cartonRepository;
         this.checkingRepository = checkingRepository;
         this.factoryAccess = factoryAccess;
         this.auditLogService = auditLogService;
+        this.selectedFactoryScope = selectedFactoryScope;
     }
 
     private void requireScope(String buyer, String orderId) {
@@ -56,7 +61,8 @@ public class CartonCheckingService {
     }
 
     private boolean accessible(String factoryCode) {
-        return factoryCode == null || factoryCode.isBlank() || factoryAccess.canAccessFactory(factoryCode);
+        return selectedFactoryScope.matches(selectedFactoryScope.requested(BUYER), factoryCode)
+                && (factoryCode == null || factoryCode.isBlank() || factoryAccess.canAccessFactory(factoryCode));
     }
 
     private static String required(String value, String label) {
@@ -235,7 +241,7 @@ public class CartonCheckingService {
             var order = orderService.getEntity(BUYER, orderId);
             names.put(orderId, order.getOrderName());
             return true;
-        } catch (org.bsl.cartonloading.common.exception.WorkflowNotFoundException ex) {
+        } catch (WorkflowNotFoundException ex) {
             return false;
         }
     }
@@ -301,11 +307,13 @@ public class CartonCheckingService {
         record.setCheckedBy(RequestActor.current());
         record.setCheckedAt(LocalDateTime.now());
         record = checkingRepository.save(record);
-        auditLogService.log(RequestActor.current(), AppConstants.CheckingResult.PASS.equals(outcome)
+        auditLogService.logChange(RequestActor.current(), AppConstants.CheckingResult.PASS.equals(outcome)
                         ? AppConstants.AuditAction.CHECKING_PASS : AppConstants.AuditAction.CHECKING_FAIL,
                 AppConstants.AuditResource.CARTON_LOADING, carton.getId(),
                 "QC " + outcome + " for Order " + orderId + ", PO " + po.getPoNumber()
-                        + ", carton " + carton.getCartonNo() + ", SSCC " + carton.getSscc18() + ": " + note, null, null);
+                        + ", carton " + carton.getCartonNo() + ", SSCC " + carton.getSscc18() + ": " + note,
+                BUYER, carton.getFactoryCode(), null,
+                java.util.Map.of("result", outcome, "sscc", String.valueOf(carton.getSscc18()), "note", String.valueOf(note)), null, null);
         return record;
     }
 

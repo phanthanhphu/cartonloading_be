@@ -31,10 +31,10 @@ public class PackingAllocationLine {
     private String containerNumber;
     private String shipmentMode;
 
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate etd;
 
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate eta;
 
     private String poNumber;
@@ -64,9 +64,9 @@ public class PackingAllocationLine {
     private String createdBy;
     private String updatedBy;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
 }

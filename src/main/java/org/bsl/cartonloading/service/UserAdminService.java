@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.service;
 
+import org.bsl.cartonloading.model.BuyerTypePermission;
+import org.bsl.cartonloading.model.SystemType;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.dto.UserDTO;
@@ -20,6 +22,10 @@ import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.List;
 import java.util.Locale;
 
@@ -80,7 +86,7 @@ public class UserAdminService {
         user.setTokenVersion(1L);
         apply(user, request, true);
         User saved = userRepository.save(user);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.USER, saved.getId(), AppMessages.userCreatedAudit(saved.getEmail()), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.USER, saved.getId(), AppMessages.userCreatedAudit(saved.getEmail()), null, null, null, saved, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.CREATE);
         return userService.toUserDTO(saved);
     }
@@ -90,12 +96,59 @@ public class UserAdminService {
         userRepository.findByEmailIgnoreCase(request.email().trim())
                 .filter(other -> !other.getId().equals(id))
                 .ifPresent(other -> { throw new IllegalArgumentException(AppMessages.EMAIL_ALREADY_EXISTS); });
+        java.util.Map<String, Object> before = audit.snapshot(user);
+        String priorEmail = user.getEmail();
+        boolean wasEnabled = user.isEnabled();
+        String priorRole = user.getRole();
+        List<String> priorBuyers = List.copyOf(user.getBuyerPermissions());
+        Map<String, List<String>> priorBuyerGrants = user.getBuyerAccessPermissions();
+        List<String> priorEsGrants = List.copyOf(user.getAccessPermissions());
+        List<String> priorFactories = List.copyOf(user.getFactoryPermissions());
+        List<String> priorTypes = user.getBuyerTypePermissions().stream()
+                .map(value -> value.buyerCode() + ": " + String.join(", ", value.types())).toList();
         apply(user, request, false);
+        List<String> changes = summarizeChange(user, wasEnabled, priorRole, priorBuyers,
+                priorBuyerGrants, priorEsGrants, priorFactories, priorTypes);
         user.setTokenVersion(user.getTokenVersion() + 1);
+        user.setLastAccessChangeDetails(changes);
+        user.setLastAccessChangeVersion(user.getTokenVersion());
         User saved = userRepository.save(user);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.USER, saved.getId(), AppMessages.userUpdatedAudit(saved.getEmail()), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.USER, saved.getId(), AppMessages.userUpdatedAudit(saved.getEmail()), null, null, before, saved, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.UPDATE);
+        // Existing authenticated WebSocket principal is the former email if Admin edited it.
+        socketPublisher.accountChanged(priorEmail, saved.getId(), saved.getTokenVersion(), saved.isEnabled(), changes);
         return userService.toUserDTO(saved);
+    }
+
+    private static void grantDiff(List<String> messages, String label, List<String> before, List<String> after) {
+        LinkedHashSet<String> added = new LinkedHashSet<>(after);
+        added.removeAll(before);
+        LinkedHashSet<String> removed = new LinkedHashSet<>(before);
+        removed.removeAll(after);
+        if (!added.isEmpty()) messages.add("Granted " + label + ": " + String.join(", ", added));
+        if (!removed.isEmpty()) messages.add("Revoked " + label + ": " + String.join(", ", removed));
+    }
+
+    private static List<String> summarizeChange(User user, boolean wasEnabled, String priorRole,
+            List<String> priorBuyers, Map<String, List<String>> priorBuyerGrants,
+            List<String> priorEsGrants, List<String> priorFactories, List<String> priorTypes) {
+        List<String> messages = new ArrayList<>();
+        if (wasEnabled != user.isEnabled()) messages.add(user.isEnabled()
+                ? "Account enabled" : "Account disabled");
+        if (!Objects.equals(priorRole, user.getRole()))
+            messages.add("Role changed: " + priorRole + " → " + user.getRole());
+        grantDiff(messages, "Buyer", priorBuyers, user.getBuyerPermissions());
+        for (String buyer : new LinkedHashSet<>(java.util.stream.Stream.concat(
+                priorBuyerGrants.keySet().stream(), user.getBuyerAccessPermissions().keySet().stream()).toList())) {
+            grantDiff(messages, buyer + " / permissions", priorBuyerGrants.getOrDefault(buyer, List.of()),
+                    user.getBuyerAccessPermissions().getOrDefault(buyer, List.of()));
+        }
+        grantDiff(messages, "ENGELBERT STRAUSS / permissions", priorEsGrants, user.getAccessPermissions());
+        grantDiff(messages, "Factory", priorFactories, user.getFactoryPermissions());
+        grantDiff(messages, "Buyer / Type", priorTypes, user.getBuyerTypePermissions().stream()
+                .map(value -> value.buyerCode() + ": " + String.join(", ", value.types())).toList());
+        if (messages.isEmpty()) messages.add("Account details updated by administrator");
+        return messages;
     }
 
     public void resetPassword(String id, String password) {
@@ -122,6 +175,9 @@ public class UserAdminService {
 
         user.setPassword(encoded);
         user.setTokenVersion(user.getTokenVersion() + 1);
+        List<String> changes = List.of("Password reset by administrator");
+        user.setLastAccessChangeDetails(changes);
+        user.setLastAccessChangeVersion(user.getTokenVersion());
         User saved = userRepository.save(user);
 
         // Verify what was actually persisted, not only the in-memory encoded value.
@@ -132,6 +188,7 @@ public class UserAdminService {
         audit.log(RequestActor.current(), action, AppConstants.AuditResource.USER, saved.getId(),
                 AppMessages.userPasswordResetAudit(saved.getEmail()), null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, action);
+        socketPublisher.accountChanged(saved.getEmail(), saved.getId(), saved.getTokenVersion(), saved.isEnabled(), changes);
     }
 
     private String validatePassword(String password) {
@@ -168,8 +225,12 @@ public class UserAdminService {
             throw new IllegalArgumentException(AppMessages.LAST_ADMIN_DELETE_BLOCKED);
         }
         userRepository.delete(user);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.USER, id, AppMessages.userDeletedAudit(user.getEmail()), null, null);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.USER, id, AppMessages.userDeletedAudit(user.getEmail()), null, null, user, null, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.DELETE);
+        // Deleted accounts must also be pushed out immediately; their JWTs are rejected
+        // by JwtAuthenticationFilter because the user no longer exists.
+        socketPublisher.accountChanged(user.getEmail(), user.getId(), user.getTokenVersion() + 1,
+                false, List.of("Account deleted by administrator"));
     }
 
     private void apply(User user, UserAdminRequest request, boolean creating) {
@@ -187,15 +248,26 @@ public class UserAdminService {
         user.setDepartmentId(departmentId);
         user.setAccessPermissions(request.accessPermissions());
         user.setBuyerPermissions(request.buyerPermissions());
+        if (!user.isAdminRole() && user.canAccessBuyer(AppConstants.Buyer.ENGELBERT_STRAUSS)
+                && (request.accessPermissions() == null || request.accessPermissions().isEmpty()))
+            throw new IllegalArgumentException("Select at least one ENGELBERT STRAUSS Access Permission");
+        // Null is for old API clients; Edit User always posts explicit Buyer-scoped grants.
+        if (request.buyerAccessPermissions() != null) {
+            user.setBuyerAccessPermissions(request.buyerAccessPermissions());
+        }
+        user.removeUnassignedBuyerAccessPermissions();
+        if (!user.isAdminRole() && user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                && !user.canLululemonRead())
+            throw new IllegalArgumentException("Select at least one LULULEMON Access Permission");
         if (request.buyerTypePermissions() != null) {
             user.setBuyerTypePermissions(request.buyerTypePermissions());
         } else if (creating) {
             // Older API clients can create accounts with just Buyer permissions;
             // default only to the two pre-existing, implemented workflow grants.
             user.setBuyerTypePermissions(user.getBuyerPermissions().stream()
-                    .filter(b -> !org.bsl.cartonloading.model.SystemType.legacyBuyerTypes(b).isEmpty())
-                    .map(b -> new org.bsl.cartonloading.model.BuyerTypePermission(
-                            b, org.bsl.cartonloading.model.SystemType.legacyBuyerTypes(b))).toList());
+                    .filter(b -> !SystemType.legacyBuyerTypes(b).isEmpty())
+                    .map(b -> new BuyerTypePermission(
+                            b, SystemType.legacyBuyerTypes(b))).toList());
         }
 
         user.setFactoryPermissions(request.factoryPermissions());
@@ -229,7 +301,7 @@ public class UserAdminService {
             }
         }
         if (!user.isAdminRole()) {
-            for (org.bsl.cartonloading.model.BuyerTypePermission grant : user.getBuyerTypePermissions()) {
+            for (BuyerTypePermission grant : user.getBuyerTypePermissions()) {
                 if (!user.getBuyerPermissions().contains(grant.buyerCode()))
                     throw new IllegalArgumentException("Type grant Buyer not assigned: " + grant.buyerCode());
                 Buyer buyer = buyerRepository.findByBuyerKeyIgnoreCase(grant.buyerCode())

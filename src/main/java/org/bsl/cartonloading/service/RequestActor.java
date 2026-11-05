@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.service;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -19,7 +20,7 @@ public final class RequestActor {
         return authentication != null && authentication.getAuthorities().stream()
                 .anyMatch(authority -> {
                     String value = String.valueOf(authority.getAuthority()).toUpperCase();
-                    return "ADMIN".equals(value) || "ROLE_ADMIN".equals(value);
+                    return AppConstants.Role.ADMIN.equals(value) || AppConstants.Role.SPRING_ADMIN.equals(value);
                 });
     }
 }

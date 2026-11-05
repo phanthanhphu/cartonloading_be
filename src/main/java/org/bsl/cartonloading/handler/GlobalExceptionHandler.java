@@ -1,6 +1,9 @@
 package org.bsl.cartonloading.handler;
 
 import org.bsl.cartonloading.common.constants.AppMessages;
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.buyers.lululemon.service.PoImportConflictException;
+import org.bsl.cartonloading.buyers.lululemon.plc.ModbusReadException;
 import jakarta.validation.ConstraintViolationException;
 import org.bsl.cartonloading.common.importing.ImportValidationException;
 import org.bsl.cartonloading.common.exception.WorkflowNotFoundException;
@@ -9,6 +12,7 @@ import org.bsl.cartonloading.dto.ApiError;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -29,6 +33,25 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
     private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /** Preserve the explicit status for a Buyer whose workflow has not been installed. */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiError> handleResponseStatus(ResponseStatusException ex) {
+        int status = ex.getStatusCode().value();
+        String message = ex.getReason() == null ? "Operation unavailable." : ex.getReason();
+        return ResponseEntity.status(ex.getStatusCode()).contentType(MediaType.APPLICATION_JSON)
+                .body(new ApiError(status, message));
+    }
+
+    @ExceptionHandler(PoImportConflictException.class)
+    public ResponseEntity<Map<String, Object>> handlePoImportConflict(PoImportConflictException ex) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", HttpStatus.CONFLICT.value());
+        body.put("code", AppConstants.PoIdentity.DUPLICATE_IMPORT_CODE);
+        body.put("message", ex.getMessage());
+        body.put("duplicates", ex.getDuplicates());
+        return ResponseEntity.status(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON).body(body);
+    }
 
     @ExceptionHandler({ImportValidationException.class, WorkflowValidationException.class, IllegalArgumentException.class})
     public ResponseEntity<ApiError> handleBadRequest(RuntimeException ex) {
@@ -92,6 +115,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AsyncRequestNotUsableException.class)
     public void handleAsyncRequestNotUsable(AsyncRequestNotUsableException ex) {
         logger.debug("Client disconnected before response completed: {}", ex.getMessage());
+    }
+
+    /** Read-only PLC Test/Read errors must report their actual cause, not a generic 500. */
+    @ExceptionHandler(ModbusReadException.class)
+    public ResponseEntity<ApiError> handleModbusReadException(ModbusReadException ex) {
+        logger.warn("Modbus device read failed: {}", ex.getMessage());
+        return json(HttpStatus.BAD_GATEWAY, new ApiError(HttpStatus.BAD_GATEWAY.value(), ex.getMessage()));
     }
 
     @ExceptionHandler(IOException.class)

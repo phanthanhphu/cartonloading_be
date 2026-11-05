@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.security;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
 import org.bsl.cartonloading.repository.UserRepository;
 import org.springframework.security.core.Authentication;
@@ -21,34 +23,74 @@ public class AccessControl {
     }
 
 
+    public boolean canViewAuditLogs() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !(auth.getDetails() instanceof WorkspaceSession session)) return false;
+        return currentUser().map(u -> u.isEnabled()
+                && u.canAccessBuyerType(session.buyer(), session.type())
+                && (u.isAdminRole() || (!u.getFactoryPermissions().isEmpty() && u.hasAnyAccessForBuyer(session.buyer())))).orElse(false);
+    }
+
+    private boolean lululemonSession() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getDetails() instanceof WorkspaceSession session
+                && AppConstants.Buyer.LULULEMON.equals(session.buyer());
+    }
+    public boolean canLululemonRead() {
+        return currentUser().map(user -> user.isEnabled() && user.canLululemonRead()).orElse(false);
+    }
+    public boolean canManageShipping() {
+        return currentUser().map(user -> user.isEnabled() && (lululemonSession()
+                ? user.canLululemonShippingScheduler() : user.canManageSales())).orElse(false);
+    }
+    /** Independent permission to create a new Shipping Date; factory and order remain scoped by the service. */
+    public boolean canCreateShippingSchedule() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (!lululemonSession() || auth == null || !(auth.getDetails() instanceof WorkspaceSession session))
+            return false;
+        return currentUser().map(user -> user.isEnabled()
+                && user.canAccessBuyerType(session.buyer(), session.type())
+                && user.canLululemonCreateShippingSchedule()).orElse(false);
+    }
+    /** Only Admin or a LULULEMON user explicitly granted Schedule Reopen may unlock a submitted date. */
+    public boolean canReopenShippingSchedule() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (!lululemonSession() || auth == null || !(auth.getDetails() instanceof WorkspaceSession session))
+            return false;
+        return currentUser().map(user -> user.isEnabled()
+                && user.canAccessBuyerType(session.buyer(), session.type())
+                && user.canLululemonReopenShippingSchedule()).orElse(false);
+    }
+    public boolean canReadBuyerData() {
+        return currentUser().map(user -> user.isEnabled() && (lululemonSession()
+                ? user.canLululemonRead() : (user.canManageSales() || user.canAssignBarcode()
+                    || user.canWeightCheck() || user.canAssignWeight() || user.isViewOnly()))).orElse(false);
+    }
+
     public boolean canManageSales() {
-        return currentUser().map(user -> user.isEnabled() && user.canManageSales()).orElse(false);
+        return currentUser().map(user -> user.isEnabled() && (lululemonSession() ? user.canLululemonUploadEdit() : user.canManageSales())).orElse(false);
     }
 
     public boolean canAssignBarcode() {
-        return currentUser().map(user -> user.isEnabled() && user.canAssignBarcode()).orElse(false);
+        return currentUser().map(user -> user.isEnabled() && (lululemonSession() ? user.canLululemonUploadEdit() : user.canAssignBarcode())).orElse(false);
     }
 
-    public boolean canPickPo() { return currentUser().map(user -> user.isEnabled() && user.canPickPo()).orElse(false); }
+    public boolean canPickPo() { return currentUser().map(user -> user.isEnabled() && (!lululemonSession() && user.canPickPo())).orElse(false); }
 
-    public boolean canAssignWeight() { return currentUser().map(user -> user.isEnabled() && user.canAssignWeight()).orElse(false); }
+    public boolean canAssignWeight() { return currentUser().map(user -> user.isEnabled() && (!lululemonSession() && user.canAssignWeight())).orElse(false); }
 
     public boolean canWeightCheck() {
-        return currentUser().map(user -> user.isEnabled() && user.canWeightCheck()).orElse(false);
-    }
-
-    public boolean canPrintRoom() {
-        return currentUser().map(user -> user.isEnabled() && user.canPrintRoom()).orElse(false);
+        return currentUser().map(user -> user.isEnabled() && (lululemonSession() ? user.canLululemonScanWeight() : user.canWeightCheck())).orElse(false);
     }
 
     public boolean canManageBarcodes() {
-        return currentUser().map(user -> user.isEnabled() && user.canManageBarcodes()).orElse(false);
+        return currentUser().map(user -> user.isEnabled() && (!lululemonSession() && user.canManageBarcodes())).orElse(false);
     }
 
     public boolean canAccessBuyer(String buyerCode) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !(auth.getDetails() instanceof WorkspaceSession session)
-                || !session.buyer().equals(org.bsl.cartonloading.model.BuyerAccess.normalize(buyerCode))) return false;
+                || !session.buyer().equals(BuyerAccess.normalize(buyerCode))) return false;
         return currentUser().map(user -> user.isEnabled() && user.canAccessBuyerType(session.buyer(), session.type())).orElse(false);
     }
 

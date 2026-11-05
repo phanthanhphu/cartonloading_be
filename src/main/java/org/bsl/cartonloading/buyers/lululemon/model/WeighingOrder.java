@@ -19,7 +19,7 @@ public class WeighingOrder {
     private String id;
     private String buyerCode;
     @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
-    private String buyerKey = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
+    private String buyerKey = AppConstants.Buyer.LULULEMON;
     private String orderId;
     private String name;
     private String factoryCode;
@@ -30,8 +30,8 @@ public class WeighingOrder {
     private String status;
     private String createdBy;
     private String updatedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
 }

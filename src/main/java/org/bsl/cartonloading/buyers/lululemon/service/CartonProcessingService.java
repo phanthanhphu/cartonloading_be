@@ -30,11 +30,13 @@ public class CartonProcessingService {
     private final AuditLogService audit;
     private final LululemonRfidService rfidService;
     private final ScalePlcDeviceService scales;
+    private final LululemonHistoryProjectionService historyProjection;
 
     public CartonProcessingService(CartonRepository cartons, PurchaseOrderRepository pos,
                                    WeighingResultRepository weightResults, BuyerFactoryAccessService factories,
                                    WorkflowService workflow, AppSocketPublisher socket, AuditLogService audit,
-                                   LululemonRfidService rfidService, ScalePlcDeviceService scales) {
+                                   LululemonRfidService rfidService, ScalePlcDeviceService scales,
+                                   LululemonHistoryProjectionService historyProjection) {
         this.cartons = cartons;
         this.pos = pos;
         this.weightResults = weightResults;
@@ -44,6 +46,7 @@ public class CartonProcessingService {
         this.audit = audit;
         this.rfidService = rfidService;
         this.scales = scales;
+        this.historyProjection = historyProjection;
     }
 
     private void requireBuyer(String buyer) {
@@ -73,6 +76,38 @@ public class CartonProcessingService {
     private PurchaseOrder requirePo(Carton carton) {
         return pos.findByIdAndOrderIdAndBuyerCode(carton.getPoId(), carton.getOrderId(), AppConstants.Buyer.LULULEMON)
                 .orElseThrow(() -> new IllegalArgumentException("Packing PO missing for this SSCC."));
+    }
+
+    /** Read-only SSCC check before opening the Carton picker or scanning SKU.
+     * A matching SSCC in a different Order/PO/Factory must never be treated as new.
+     * Final identify/assign still validates atomically against concurrent operators.
+     */
+    public record SsccPrecheck(String status, String cartonId, String message) { }
+
+    public SsccPrecheck checkSscc(String buyer, String rawSscc, String factoryCode,
+                                  String orderId, String poId) {
+        requireBuyer(buyer);
+        String sscc = SsccNormalizer.normalize(rawSscc);
+        if (sscc == null) throw new IllegalArgumentException("Scan a valid SSCC-18.");
+        if (orderId == null || orderId.isBlank() || poId == null || poId.isBlank())
+            throw new IllegalArgumentException("Open the correct Order and PO first.");
+        PurchaseOrder selectedPo = pos.findByIdAndOrderIdAndBuyerCode(poId, orderId,
+                AppConstants.Buyer.LULULEMON).orElseThrow(() ->
+                new IllegalArgumentException("Selected Order/PO not found."));
+        requireFactory(selectedPo.getFactoryCode());
+        if (factoryCode == null || !factoryCode.equalsIgnoreCase(selectedPo.getFactoryCode()))
+            throw new AccessDeniedException("PO does not belong to the selected Factory.");
+
+        Carton assigned = cartons.findBySscc18(sscc).orElse(null);
+        if (assigned == null) return new SsccPrecheck("AVAILABLE", null, "New SSCC. Select its Carton and scan SKU.");
+        // Do not disclose another PO's or Factory's details to the operator.
+        if (!AppConstants.Buyer.LULULEMON.equals(assigned.getBuyerCode())
+                || !orderId.equals(assigned.getOrderId())
+                || !poId.equals(assigned.getPoId())
+                || !factoryCode.equalsIgnoreCase(assigned.getFactoryCode()))
+            return new SsccPrecheck("CONFLICT", null,
+                    "SSCC is already assigned to another Carton/PO. Scan the correct SSCC label.");
+        return new SsccPrecheck("CURRENT_PO", assigned.getId(), "SSCC belongs to this PO.");
     }
 
     public record IdentifiedCarton(PurchaseOrder po, Carton carton) { }
@@ -149,7 +184,7 @@ public class CartonProcessingService {
         if (carton.getPlannedQty() == null || carton.getPlannedQty() <= 0)
             throw new IllegalArgumentException("Carton planned Qty is missing.");
         if (AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())
-                && "PASS".equals(carton.getRfidStatus()))
+                && AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus()))
             throw new IllegalArgumentException("Carton already FINAL PASS. Open history instead.");
         if (carton.getWeightStatus() != null)
             throw new IllegalArgumentException("Carton already has a weight result. Supervisor must reopen it before retry.");
@@ -163,6 +198,7 @@ public class CartonProcessingService {
                     new ConfirmLabelRequest(input.sku().trim()));
         }
         po = requirePo(carton); // claim of previously unset PO SKU may have changed it
+        workflow.recordCartonIdentification(carton, input.sku());
         return new IdentifiedCarton(po, carton);
     }
 
@@ -195,12 +231,12 @@ public class CartonProcessingService {
                 // Count still-unassigned cartons as Remaining. Otherwise END is
                 // displayed too early after the last *scanned* carton.
                 total++;
-                boolean rfidFinished = "PASS".equals(c.getRfidStatus()) || "FAILED".equals(c.getRfidStatus());
+                boolean rfidFinished = AppConstants.RfidCheck.PASS.equals(c.getRfidStatus()) || AppConstants.RfidCheck.FAILED.equals(c.getRfidStatus());
                 boolean weightFinished = AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())
                         || AppConstants.WeightStatus.FAILED.equals(c.getWeightStatus());
                 if (rfidFinished && weightFinished) {
                     processed++;
-                    if ("PASS".equals(c.getRfidStatus()) && AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())) passed++;
+                    if (AppConstants.RfidCheck.PASS.equals(c.getRfidStatus()) && AppConstants.WeightStatus.PASS.equals(c.getWeightStatus())) passed++;
                     else failed++;
                 }
             }
@@ -211,14 +247,15 @@ public class CartonProcessingService {
 
     /** RFID must be finished, but FAILED does not block weighing. Preserve independent results. */
     private static boolean rfidFinished(Carton carton) {
-        return "PASS".equals(carton.getRfidStatus()) || "FAILED".equals(carton.getRfidStatus());
+        return AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus()) || AppConstants.RfidCheck.FAILED.equals(carton.getRfidStatus());
     }
 
     public void armAutoWeight(String buyer, String sscc, String stationCode) {
         Carton carton = requireCarton(buyer, sscc);
         if (!rfidFinished(carton) || carton.getWeightStatus() != null)
             throw new IllegalArgumentException("Finish RFID (PASS or FAILED) before arming the scale");
-        scales.armSimulator(stationCode, carton.getSscc18(), carton.getFactoryCode());
+        if (scales.isModbus(stationCode)) scales.armModbus(stationCode, carton.getSscc18(), carton.getFactoryCode());
+        else scales.armSimulator(stationCode, carton.getSscc18(), carton.getFactoryCode());
     }
 
     public synchronized WeightResult autoWeight(String buyer, String sscc, String stationCode, String eventId) {
@@ -235,15 +272,19 @@ public class CartonProcessingService {
         if (finished == null || !Objects.equals(finished.getId(), carton.getRfidSessionId())
                 || !Objects.equals(finished.getStatus(), carton.getRfidStatus()) || finished.getFinishedAt() == null)
             throw new IllegalArgumentException("A completed persisted RFID attempt is required before weighing");
-        ScalePlcDeviceService.Reading reading = scales.claimSimulator(stationCode, eventId,
-                carton.getSscc18(), carton.getFactoryCode(), finished.getFinishedAt());
+        boolean modbus = scales.isModbus(stationCode);
+        ScalePlcDeviceService.Reading reading = modbus
+                ? scales.claimModbus(stationCode, eventId, carton.getSscc18(), carton.getFactoryCode(), finished.getFinishedAt())
+                : scales.claimSimulator(stationCode, eventId, carton.getSscc18(), carton.getFactoryCode(), finished.getFinishedAt());
         try {
             WeightResult saved = captureWeight(buyer,
-                    new CartonProcessingWeightRequest(sscc, stationCode, reading.weightKg()), AppConstants.WeightSource.SIMULATOR, eventId);
+                    new CartonProcessingWeightRequest(sscc, stationCode, reading.weightKg()),
+                    modbus ? AppConstants.WeightSource.PLC : AppConstants.WeightSource.SIMULATOR, eventId);
             scales.releaseSimulator(stationCode, carton.getSscc18());
             return saved;
         } catch (RuntimeException e) {
-            scales.undoSimulatorClaim(stationCode, eventId);
+            if (modbus) scales.undoModbusClaim(stationCode, eventId);
+            else scales.undoSimulatorClaim(stationCode, eventId);
             throw e;
         }
     }
@@ -256,7 +297,7 @@ public class CartonProcessingService {
         if (input == null) throw new IllegalArgumentException("Weight data is required.");
         Carton carton = requireCarton(buyer, input.sscc());
         PurchaseOrder po = requirePo(carton);
-        if (!"PASS".equals(carton.getRfidStatus()) && !"FAILED".equals(carton.getRfidStatus()))
+        if (!AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus()) && !AppConstants.RfidCheck.FAILED.equals(carton.getRfidStatus()))
             throw new IllegalArgumentException("Finish RFID scan before weighing this carton.");
         if (carton.getWeightStatus() != null)
             throw new IllegalArgumentException("Weight already saved. Supervisor reopen is required.");
@@ -273,6 +314,9 @@ public class CartonProcessingService {
         BigDecimal tolerance = gross.setScale(3, RoundingMode.HALF_UP);
         String result = difference.abs().compareTo(tolerance) <= 0
                 ? AppConstants.WeightStatus.PASS : AppConstants.WeightStatus.FAILED;
+        java.util.Map<String, Object> weightBefore = java.util.Map.of("rfidStatus", String.valueOf(carton.getRfidStatus()),
+                "weightStatus", String.valueOf(carton.getWeightStatus()), "actualWeightKg", String.valueOf(carton.getActualWeightKg()),
+                "expectedWeightKg", String.valueOf(carton.getExpectedWeightKg()));
         LocalDateTime now = LocalDateTime.now();
         carton.setExpectedWeightKg(expected);
         carton.setActualWeightKg(actual);
@@ -307,12 +351,17 @@ public class CartonProcessingService {
         event.setUserId(RequestActor.current());
         event.setCreatedAt(now);
         event = weightResults.save(event);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.WEIGHT_CAPTURE,
+        // Persist the shared completed-outcome projection BEFORE notifying History via Socket.
+        historyProjection.recordCompleted(carton, po, event);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.WEIGHT_CAPTURE,
                 AppConstants.AuditResource.WEIGHING, carton.getId(),
                 "Direct Carton Processing " + source + " weight (no Shipping Schedule): SSCC " + carton.getSscc18()
                         + ", Factory " + carton.getFactoryCode() + ", station " + station
                         + ", RFID " + carton.getRfidStatus() + ", weight " + result
-                        + ", actual " + actual + " kg", null, null);
+                        + ", actual " + actual + " kg", AppConstants.Buyer.LULULEMON, carton.getFactoryCode(),
+                weightBefore, java.util.Map.of("rfidStatus", String.valueOf(carton.getRfidStatus()),
+                    "weightStatus", String.valueOf(carton.getWeightStatus()), "actualWeightKg", String.valueOf(carton.getActualWeightKg()),
+                    "expectedWeightKg", String.valueOf(carton.getExpectedWeightKg())), null, null);
         socket.cartonLoadingChanged(AppConstants.SocketEvent.WEIGHT_RESULT_PREFIX + result, carton.getId());
         return new WeightResult(carton, event);
     }
@@ -360,9 +409,14 @@ public class CartonProcessingService {
         carton.setUpdatedBy(RequestActor.current());
         carton.setUpdatedAt(now);
         carton = cartons.save(carton);
-        audit.log(RequestActor.current(), AppConstants.AuditAction.REWEIGH_OPEN,
+        historyProjection.removeCurrent(carton);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.REWEIGH_OPEN,
                 AppConstants.AuditResource.WEIGHING, carton.getId(),
-                "Direct station weight reopened for SSCC " + carton.getSscc18() + ": " + reason.trim(), null, null);
+                "Direct station weight reopened for SSCC " + carton.getSscc18() + ": " + reason.trim(),
+                AppConstants.Buyer.LULULEMON, carton.getFactoryCode(),
+                java.util.Map.of("weightStatus", String.valueOf(latestWeight.getResult()),
+                    "actualWeightKg", String.valueOf(latestWeight.getActualWeightKg())),
+                java.util.Map.of("weightStatus", "REOPENED"), null, null);
         socket.cartonLoadingChanged(AppConstants.SocketEvent.WEIGHT_REOPENED, carton.getId());
         return carton;
     }
@@ -390,10 +444,10 @@ public class CartonProcessingService {
         PurchaseOrder po = requirePo(carton);
         if (po.getFactoryCode() == null || !po.getFactoryCode().equalsIgnoreCase(carton.getFactoryCode()))
             throw new IllegalArgumentException("Carton Factory does not match the imported PO.");
-        boolean rfidDone = "PASS".equals(carton.getRfidStatus()) || "FAILED".equals(carton.getRfidStatus());
+        boolean rfidDone = AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus()) || AppConstants.RfidCheck.FAILED.equals(carton.getRfidStatus());
         boolean weightDone = AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())
                 || AppConstants.WeightStatus.FAILED.equals(carton.getWeightStatus());
-        boolean failed = "FAILED".equals(carton.getRfidStatus())
+        boolean failed = AppConstants.RfidCheck.FAILED.equals(carton.getRfidStatus())
                 || AppConstants.WeightStatus.FAILED.equals(carton.getWeightStatus());
         if (!rfidDone || !weightDone || !failed)
             throw new IllegalArgumentException("Recall is allowed only for FINAL FAILED cartons with finished RFID and Weight.");
@@ -408,7 +462,7 @@ public class CartonProcessingService {
         if (weight == null || weight.getShippingScheduleId() != null)
             throw new IllegalArgumentException("Only direct-station results can be recalled here.");
         RfidScanSession prior = rfidService.latest(orderId, poId, carton.getSscc18());
-        if (prior == null || !("PASS".equals(prior.getStatus()) || "FAILED".equals(prior.getStatus())))
+        if (prior == null || !(AppConstants.RfidCheck.PASS.equals(prior.getStatus()) || AppConstants.RfidCheck.FAILED.equals(prior.getStatus())))
             throw new IllegalArgumentException("RFID record is missing, active or already reopened. Refresh first.");
         String explanation = "FINAL FAILED recall: " + reason.trim();
         // Weight MUST be reopened before the next RFID session can start.
@@ -416,10 +470,15 @@ public class CartonProcessingService {
         reopenManualWeight(buyer, carton.getSscc18(), explanation);
         rfidService.reopen(orderId, poId, carton.getSscc18(), explanation);
         Carton updated = requireCarton(buyer, carton.getSscc18());
-        audit.log(RequestActor.current(), AppConstants.AuditAction.RECALL_FAILED_CARTON,
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.RECALL_FAILED_CARTON,
                 AppConstants.AuditResource.WEIGHING, updated.getId(),
                 "Recalled FINAL FAILED carton " + updated.getCartonNo() + " (SSCC " + updated.getSscc18()
-                        + ") for RFID then Weight retry. Reason: " + reason.trim(), null, null);
+                        + ") for RFID then Weight retry. Reason: " + reason.trim(),
+                AppConstants.Buyer.LULULEMON, updated.getFactoryCode(),
+                java.util.Map.of("rfidStatus", String.valueOf(carton.getRfidStatus()),
+                    "weightStatus", String.valueOf(carton.getWeightStatus())),
+                java.util.Map.of("rfidStatus", String.valueOf(updated.getRfidStatus()),
+                    "weightStatus", String.valueOf(updated.getWeightStatus())), null, null);
         return new IdentifiedCarton(po, updated);
     }
 

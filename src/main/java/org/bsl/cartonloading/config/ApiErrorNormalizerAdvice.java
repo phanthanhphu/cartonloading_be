@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.config;
 
+import org.bsl.cartonloading.dto.ApiError;
 import org.bsl.cartonloading.common.constants.AppMessages;
 
 import org.bsl.cartonloading.support.ApiErrorPayloadNormalizer;
@@ -67,9 +68,9 @@ public class ApiErrorNormalizerAdvice implements ResponseBodyAdvice<Object> {
             }
             return result;
         }
-        if (body instanceof org.bsl.cartonloading.dto.ApiError) {
-            org.bsl.cartonloading.dto.ApiError error =
-                    (org.bsl.cartonloading.dto.ApiError) body;
+        if (body instanceof ApiError) {
+            ApiError error =
+                    (ApiError) body;
             result.put("status", error.getStatus());
             result.put("message", error.getMessage());
             result.put("timestamp", error.getTimestamp());

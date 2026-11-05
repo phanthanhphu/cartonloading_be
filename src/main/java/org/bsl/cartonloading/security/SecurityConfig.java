@@ -1,5 +1,7 @@
 package org.bsl.cartonloading.security;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -46,14 +48,14 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        .requestMatchers("/api/auth/login", "/login").permitAll()
+                        .requestMatchers("/api/auth/login", "/api/auth/account-change", "/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/buyers/login-options").permitAll()
                         .requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**", "/css/**", "/js/**", "/images/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/health", "/info", "/ws/**", "/ws-native").permitAll()
                         // API docs and remaining Actuator endpoints require authentication by default.
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html",
                                 "/swagger-resources/**", "/webjars/**").authenticated()
-                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+                        .requestMatchers("/actuator/**").hasRole(AppConstants.Role.ADMIN)
 
                         // Buyer modules enforce buyer/factory/operation permissions at controller/service level.
                         // All authenticated users (including VIEW_SYSTEM) may only read/search/export.

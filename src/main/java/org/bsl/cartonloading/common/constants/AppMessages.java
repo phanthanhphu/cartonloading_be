@@ -243,6 +243,9 @@ public final class AppMessages {
     public static final String EMAIL_ALREADY_EXISTS = "Email already exists";
     public static final String PASSWORD_ENCODING_FAILED = "Password encoding verification failed";
     public static final String PASSWORD_NOT_PERSISTED = "Password was not persisted correctly";
+    public static final String CURRENT_PASSWORD_INCORRECT = "Current password is incorrect";
+    public static final String PASSWORD_CONFIRMATION_MISMATCH = "New password confirmation does not match";
+    public static final String NEW_PASSWORD_MUST_DIFFER = "New password must differ from current password";
     public static final String PASSWORD_LENGTH = "Password must be between 8 and 200 characters";
     public static final String PASSWORD_NOT_BLANK = "Password cannot be blank";
     public static final String LAST_ADMIN_DELETE_BLOCKED = "Cannot delete the last Admin account";

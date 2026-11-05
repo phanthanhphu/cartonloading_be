@@ -66,7 +66,7 @@ public record CartonScanProgress(
             // Persisted current results, not an old PASS event or an SSCC/label confirmation.
             // Recalling either inspection makes the carton pending until BOTH PASS again.
             boolean completed = planned > 0
-                    && "PASS".equals(carton.getRfidStatus())
+                    && AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus())
                     && AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus());
             if (completed) {
                 completedQty += planned;

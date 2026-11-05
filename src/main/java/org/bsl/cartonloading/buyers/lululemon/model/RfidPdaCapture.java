@@ -16,7 +16,7 @@ import java.util.Set;
 @Document(collection = AppConstants.Collection.RFID_PDA_CAPTURES)
 public class RfidPdaCapture {
     @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
-    private String buyerKey = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
+    private String buyerKey = AppConstants.Buyer.LULULEMON;
     @Id private String serial;
     private String station;
     private String order;

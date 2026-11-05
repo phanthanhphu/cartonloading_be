@@ -8,5 +8,6 @@ import java.util.Optional;
 
 public interface PackingOrderRepository extends MongoRepository<PackingOrder, String> {
     List<PackingOrder> findByBuyerCode(String buyerCode);
+    List<PackingOrder> findByBuyerCodeAndFactoryCode(String buyerCode, String factoryCode);
     Optional<PackingOrder> findByIdAndBuyerCode(String id, String buyerCode);
 }

@@ -67,7 +67,7 @@ public class BuyerFactoryAccessService {
     }
 
     public boolean canAccessWeighingFactory(String factoryCode) {
-        return currentUser().isAdminRole() || (activeFactory(factoryCode) && currentUser().canAccessWeighingFactory(factoryCode));
+        return currentUser().isAdminRole() || (activeFactory(factoryCode) && currentUser().canAccessFactory(factoryCode));
     }
 
     public void assertWeighingFactoryAccess(String factoryCode) {

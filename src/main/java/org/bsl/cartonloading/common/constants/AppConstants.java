@@ -9,6 +9,11 @@ import java.util.List;
 public final class AppConstants {
     private AppConstants() { }
 
+    public static final class HttpHeader {
+        public static final String ACTIVE_FACTORY = "X-Active-Factory";
+        private HttpHeader() { }
+    }
+
     public static final class Buyer {
         public static final String LULULEMON = "LULULEMON";
         public static final String ENGELBERT_STRAUSS = "ENGELBERT_STRAUSS";
@@ -25,6 +30,27 @@ public final class AppConstants {
         private Buyer() { }
     }
 
+    /** Allowed login workflow Types (Buyer identity is a separate concept). */
+    public static final class SystemType {
+        public static final String RFID = "RFID";
+        public static final String UNRFID = "UNRFID";
+        public static final String FACTORY_USE_ONLY = "FACTORY_USE_ONLY";
+        private SystemType() { }
+    }
+
+    public static final class OrderDeletion {
+        public static final String DELETING = "DELETING";
+        public static final String CONFIRM_PREFIX = "DELETE ";
+        private OrderDeletion() { }
+    }
+
+    public static final class PoIdentity {
+        public static final String RESERVED = "RESERVED";
+        public static final String COMMITTED = "COMMITTED";
+        public static final String DUPLICATE_IMPORT_CODE = "ALL_BP_DUPLICATE_PO";
+        private PoIdentity() { }
+    }
+
     public static final class Collection {
         public static final String USERS = "users";
         public static final String DEPARTMENTS = "departments";
@@ -36,11 +62,12 @@ public final class AppConstants {
         public static final String PACKING_LIST_LINES = "packing_list_lines";
         public static final String CARTON_OPERATIONS = "carton_operations";
         public static final String FACTORY_BARCODES = "factory_barcodes";
-        public static final String SCALE_STATIONS = "scale_stations";
-        public static final String SCALE_PLC_DEVICES = "scale_plc_devices";
+        public static final String DEVICE_CONFIGURATIONS = "device_configurations";
         public static final String SHIPMENTS = "shipments";
         public static final String PURCHASE_ORDERS = "purchase_orders";
+        public static final String PO_IDENTITY_REGISTRY = "po_identity_registry";
         public static final String CARTONS = "cartons";
+        public static final String CARTON_PROCESSING_HISTORY = "carton_processing_history";
         public static final String CARTON_ITEMS = "carton_items";
         public static final String SCAN_EVENTS = "scan_events";
         public static final String WEIGHING_PROFILES = "weighing_profiles";
@@ -52,8 +79,24 @@ public final class AppConstants {
         public static final String PO_PICK_HISTORY = "po_pick_history";
         public static final String RFID_SCAN_SESSIONS = "rfid_scan_sessions";
         public static final String RFID_PDA_CAPTURES = "rfid_pda_captures";
-        public static final String RFID_PDA_DEVICES = "rfid_pda_devices";
+        public static final String DEVICE_COMMAND_EVENTS = "device_command_events";
+        public static final String DEVICE_RUNTIME_SNAPSHOTS = "device_runtime_snapshots";
+        public static final String PACKING_IMPORT_BATCHES = "packing_import_batches";
         private Collection() { }
+    }
+
+    /** Historic physical names are read exclusively by the database migration/legacy adapter.
+     *  Never use these names to declare a new operational Mongo collection. */
+    public static final class LegacyCollection {
+        public static final String SCALE_STATIONS = "scale_stations";
+        public static final String SCALE_PLC_DEVICES = "scale_plc_devices";
+        public static final String RFID_PDA_DEVICES = "rfid_pda_devices";
+        public static final String CONVEYOR_PLC_DEVICES = "lululemon_conveyor_plc_devices";
+        public static final String STATION_DEVICE_BINDINGS = "lululemon_station_device_bindings";
+        public static final String DEVICE_COMMAND_EVENTS = "lululemon_device_command_events";
+        public static final String DEVICE_RUNTIME_SNAPSHOTS = "lululemon_device_runtime_snapshots";
+        public static final String PACKING_IMPORT_BATCHES = "lululemon_packing_import_batches";
+        private LegacyCollection() { }
     }
 
     public static final class Plc {
@@ -82,6 +125,9 @@ public final class AppConstants {
 
     public static final class Role {
         public static final String ADMIN = "ADMIN";
+        // Spring Security and historical database aliases; retain their wire values.
+        public static final String SPRING_ADMIN = "ROLE_ADMIN";
+        public static final String LEGACY_ADMINISTRATOR = "ADMINISTRATOR";
         public static final String USER = "USER";
         private Role() { }
     }
@@ -94,7 +140,13 @@ public final class AppConstants {
         public static final String ASSIGN_WEIGHT = "ASSIGN_WEIGHT";
         public static final String WEIGHT_CHECK = "WEIGHT_CHECK";
         public static final String BARCODE_OPERATOR = "BARCODE_OPERATOR";
-        public static final String PRINT_ROOM = "PRINT_ROOM";
+        // Buyer-scoped LULULEMON permissions (separate from legacy ES accessPermissions).
+        public static final String LULU_UPLOAD_EDIT_DATA = "UPLOAD_EDIT_DATA";
+        public static final String LULU_SHIPPING_SCHEDULER = "SHIPPING_SCHEDULER";
+        public static final String LULU_SHIPPING_SCHEDULE_CREATE = "SHIPPING_SCHEDULE_CREATE";
+        public static final String LULU_SHIPPING_SCHEDULE_REOPEN = "SHIPPING_SCHEDULE_REOPEN";
+        public static final String LULU_SCAN_RFID_SSCC_SKU_WEIGHT = "SCAN_RFID_SSCC_SKU_WEIGHT";
+        public static final String LULU_VIEW_ONLY = "VIEW_ONLY";
         private Permission() { }
     }
 
@@ -142,7 +194,29 @@ public final class AppConstants {
     }
 
 
+    // Exact wire values shared by PLC/scale/conveyor integrations.
+    public static final class DeviceConnection {
+        public static final String SIMULATOR = "SIMULATOR";
+        public static final String MODBUS_TCP = "MODBUS_TCP";
+        public static final String CONNECTED = "CONNECTED";
+        public static final String DISCONNECTED = "DISCONNECTED";
+        private DeviceConnection() { }
+    }
+
+    // Consistent formatting across API DTOs, histories and exports.
+    public static final class DatePattern {
+        public static final String DATE = "yyyy-MM-dd";
+        public static final String DATE_TIME = "yyyy-MM-dd'T'HH:mm:ss";
+        private DatePattern() { }
+    }
+
     public static final class SecurityExpression {
+        // Keep the SpEL expressions byte-for-byte identical to controller annotations.
+        public static final String BUYER_ACCESS = "@accessControl.canAccessBuyer(#buyer)";
+        public static final String BUYER_ADMIN = "@accessControl.canAccessBuyer(#buyer) and @accessControl.isAdmin()";
+        public static final String BUYER_WEIGHT_CHECK = "@accessControl.canAccessBuyer(#buyer) and @accessControl.canWeightCheck()";
+        public static final String BUYER_READ_DATA = "@accessControl.canAccessBuyer(#buyer) and @accessControl.canReadBuyerData()";
+        public static final String BUYER_MANAGE_SALES = "@accessControl.canAccessBuyer(#buyer) and @accessControl.canManageSales()";
         public static final String BARCODE_BUYER_ACCESS = "@accessControl.canAccessBuyer('" + Buyer.ENGELBERT_STRAUSS + "')";
         public static final String BARCODE_BUYER_MANAGE_BARCODES = BARCODE_BUYER_ACCESS + " and (@accessControl.canManageBarcodes())";
         public static final String BARCODE_BUYER_ADMIN = BARCODE_BUYER_ACCESS + " and (@accessControl.isAdmin())";
@@ -185,6 +259,23 @@ public final class AppConstants {
     }
 
     /** RFID verification is intentionally separate from the logical item status. */
+    /** Persisted RFID scan verdicts. DIFFERENT from RfidStatus (logical lifecycle). */
+    public static final class RfidCheck {
+        public static final String PASS = "PASS";
+        public static final String FAILED = "FAILED";
+        private RfidCheck() { }
+    }
+
+    /** Read-only carton summary returned by Carton.getFinalCheckStatus(). */
+    public static final class FinalCheck {
+        public static final String RFID_HOLD = "RFID_HOLD";
+        public static final String WAITING_RFID = RfidStatus.WAITING_RFID;
+        public static final String WEIGHT_FAILED = "WEIGHT_FAILED";
+        public static final String WAITING_WEIGHT = ProgressStatus.WAITING_WEIGHT;
+        public static final String FINAL_PASS = "FINAL_PASS";
+        private FinalCheck() { }
+    }
+
     public static final class RfidStatus {
         public static final String WAITING_RFID = "WAITING_RFID";
         public static final String VERIFIED = "VERIFIED";
@@ -196,6 +287,7 @@ public final class AppConstants {
     public static final class WeightStatus {
         public static final String PASS = "PASS";
         public static final String FAILED = "FAILED";
+        public static final String HOLD = "HOLD"; // legacy stored status
         private WeightStatus() { }
     }
 
@@ -248,6 +340,7 @@ public final class AppConstants {
      * the implementation classes use domain-only names.
      */
     public static final class ApiPath {
+        public static final String ACCOUNT = "/api/account";
         public static final String SSCC_WORKFLOW_ORDER = "/api/buyers/{buyer}/lululemon/orders/{orderId}";
         public static final String SSCC_WORKFLOW_WEIGHING = "/api/buyers/{buyer}/lululemon/orders/{orderId}/weighing";
         public static final String BARCODE_WORKFLOW_ORDERS = "/api/buyers/{buyer}/orders";
@@ -267,6 +360,7 @@ public final class AppConstants {
         public static final String UPDATE = "UPDATE";
         public static final String DELETE = "DELETE";
         public static final String RESET_PASSWORD = "RESET_PASSWORD";
+        public static final String CHANGE_OWN_PASSWORD = "CHANGE_OWN_PASSWORD";
         public static final String GENERATE_RESET_PASSWORD = "GENERATE_RESET_PASSWORD";
         public static final String ALL_BP_IMPORT = "LULULEMON_ALL_BP_IMPORT";
         public static final String PO_UPDATE = "LULULEMON_PO_UPDATE";
@@ -276,6 +370,9 @@ public final class AppConstants {
         public static final String SHIPPING_IMPORT = "LULULEMON_SHIPPING_IMPORT";
         public static final String SHIPPING_SCHEDULE_CREATE = "LULULEMON_SHIPPING_SCHEDULE_CREATE";
         public static final String PO_SHIPPING_PLAN_CREATE = "LULULEMON_PO_SHIPPING_PLAN_CREATE";
+        public static final String PO_SHIPPING_PLAN_REMOVE = "LULULEMON_PO_SHIPPING_PLAN_REMOVE";
+        public static final String PO_SHIPPING_PLAN_SUBMIT = "LULULEMON_PO_SHIPPING_PLAN_SUBMIT";
+        public static final String PO_SHIPPING_PLAN_UNSUBMIT = "LULULEMON_PO_SHIPPING_PLAN_UNSUBMIT";
         public static final String CHECKING_PASS = "LULULEMON_CARTON_QC_PASS";
         public static final String CHECKING_FAIL = "LULULEMON_CARTON_QC_FAIL";
         public static final String SHIPPING_SCHEDULE_REMOVE = "LULULEMON_SHIPPING_SCHEDULE_REMOVE";
@@ -434,6 +531,14 @@ public final class AppConstants {
     }
 
     public static final class ExcelAction {
+        public static final String ACTION_COLUMN = "ACTION";
+        public static final String ID_COLUMN = "ID";
+        public static final String NEW_MODE = "NEW";
+        public static final String EDIT_MODE = "EDIT";
+        public static final String PO_ID_COLUMN = "__PO_ID";
+        public static final String SOURCE_ROW_COLUMN = "__SOURCE_ROW";
+        public static final String DATA_VERSION_COLUMN = "__DATA_VERSION";
+        public static final int MAX_ACTION_ROWS = 15_000;
         public static final String CREATE = "CREATE";
         public static final String UPDATE = "UPDATE";
         public static final String DELETE = "DELETE";
@@ -481,6 +586,9 @@ public final class AppConstants {
     }
 
     public static final class Excel {
+        public static final String LULULEMON_EXPORT_PREFIX = "lululemon_";
+        public static final String EXPORT_TIMESTAMP_FORMAT = "yyyyMMdd_HHmmss";
+        public static final String EXPORT_ZONE = "Asia/Ho_Chi_Minh";
         public static final String ALL_BP_SHEET = "All_BP";
         public static final String ALLOCATION_SHEET = "ALLOCATION";
         public static final String PACKING_LIST_SHEET = "PACKING LIST";
@@ -502,6 +610,8 @@ public final class AppConstants {
     }
 
     public static final class Security {
+        public static final int MIN_PASSWORD_LENGTH = 8;
+        public static final int MAX_PASSWORD_LENGTH = 200;
         public static final String TEMP_PASSWORD_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
         public static final String TEMP_PASSWORD_LOWER = "abcdefghijkmnopqrstuvwxyz";
         public static final String TEMP_PASSWORD_DIGITS = "23456789";
@@ -522,14 +632,18 @@ public final class AppConstants {
 
     public static final class AllBp {
         public static final java.util.Map<String, java.util.Set<String>> ALIASES;
-        public static final java.util.Set<String> FORMULA_KEYS = java.util.Set.of(
-                "ODD_RATIO", "CTNS", "REMAINDER", "FOB_AMOUNT",
-                "TOTAL_FOB_PRICE_TAG", "FOB_FTY_PRICE", "FOB_FTY_AMOUNT"
-        );
-        public static final java.util.Set<String> NUMERIC_SOURCE_KEYS = java.util.Set.of(
-                "QTY", "PCS_CTN", "ODD_RATIO", "CTNS", "REMAINDER",
+        /** Historical source columns excluded from new imports, exports and the UI.
+         * Keep their aliases below to identify and hide them in existing MongoDB records. */
+        public static final java.util.Set<String> RETIRED_KEYS = java.util.Set.of(
                 "FOB_PRICE", "CARE_CONTENT_LABEL", "CHINA_INSPECTION_TAG", "FOB_AMOUNT",
                 "TOTAL_FOB_PRICE_TAG", "FOB_FTY_PRICE", "FOB_FTY_AMOUNT"
+        );
+        public static final int TEMPLATE_BUSINESS_COLUMN_COUNT = 29;
+        public static final java.util.Set<String> FORMULA_KEYS = java.util.Set.of(
+                "ODD_RATIO", "CTNS", "REMAINDER"
+        );
+        public static final java.util.Set<String> NUMERIC_SOURCE_KEYS = java.util.Set.of(
+                "QTY", "PCS_CTN", "ODD_RATIO", "CTNS", "REMAINDER"
         );
 
         static {

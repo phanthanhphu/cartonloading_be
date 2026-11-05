@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.model;
 
+import org.bsl.cartonloading.common.constants.AppConstants;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -14,6 +15,6 @@ public class ShippingScheduleHistoryEntry {
     private String action;
     private String userId;
     private String note;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
 }

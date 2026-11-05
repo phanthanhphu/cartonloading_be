@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.dto.admin;
 
+import org.bsl.cartonloading.model.BuyerTypePermission;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -17,7 +18,8 @@ public record UserAdminRequest(
         String departmentId,
         List<String> accessPermissions,
         List<String> buyerPermissions,
-        List<org.bsl.cartonloading.model.BuyerTypePermission> buyerTypePermissions,
+        List<BuyerTypePermission> buyerTypePermissions,
         List<String> factoryPermissions,
-        List<String> weighingFactoryPermissions
+        List<String> weighingFactoryPermissions,
+        java.util.Map<String, List<String>> buyerAccessPermissions
 ) {}

@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
+import org.bsl.cartonloading.model.Factory;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
 import org.bsl.cartonloading.buyers.es.model.PackingOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
@@ -8,6 +9,7 @@ import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.service.FactoryCatalogService;
+import org.bsl.cartonloading.service.SelectedFactoryScope;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -24,8 +26,9 @@ public class LululemonOperationsDashboardService {
     private final MongoTemplate mongo;
     private final BuyerFactoryAccessService access;
     private final FactoryCatalogService factories;
-    public LululemonOperationsDashboardService(MongoTemplate mongo, BuyerFactoryAccessService access, FactoryCatalogService factories) {
-        this.mongo = mongo; this.access = access; this.factories = factories;
+    private final SelectedFactoryScope selectedFactoryScope;
+    public LululemonOperationsDashboardService(MongoTemplate mongo, BuyerFactoryAccessService access, FactoryCatalogService factories, SelectedFactoryScope selectedFactoryScope) {
+        this.mongo = mongo; this.access = access; this.factories = factories; this.selectedFactoryScope = selectedFactoryScope;
     }
 
     public record Totals(int orders, int pos, long plannedCartons, int createdCartons,
@@ -58,8 +61,8 @@ public class LululemonOperationsDashboardService {
     private static boolean yes(String value, String expect) { return expect.equalsIgnoreCase(clean(value)); }
     private static int qty(Integer value) { return Math.max(0, value == null ? 0 : value); }
     private static boolean rfidAttempted(Carton carton, Set<String> attempts) {
-        return attempts.contains(clean(carton.getId())) || "PASS".equals(carton.getRfidStatus())
-                || "FAILED".equals(carton.getRfidStatus()) || carton.getRfidVerifiedAt() != null;
+        return attempts.contains(clean(carton.getId())) || AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus())
+                || AppConstants.RfidCheck.FAILED.equals(carton.getRfidStatus()) || carton.getRfidVerifiedAt() != null;
     }
 
     public Overview overview() {
@@ -67,6 +70,7 @@ public class LululemonOperationsDashboardService {
         if (!user.isEnabled() || !user.canAccessBuyer(BUYER))
             throw new AccessDeniedException("LULULEMON buyer access denied");
         boolean unrestricted = access.isUnrestricted();
+        String activeFactory = selectedFactoryScope.requested(BUYER);
         List<PurchaseOrder> raw = mongo.find(Query.query(Criteria.where("buyerCode").is(BUYER)), PurchaseOrder.class);
         Map<String, List<PurchaseOrder>> grouped = new TreeMap<>();
         for (PurchaseOrder row : raw) {
@@ -80,6 +84,7 @@ public class LululemonOperationsDashboardService {
                 .stream().collect(Collectors.toMap(PackingOrder::getId, row -> row, (a,b) -> a));
         Map<String, List<Carton>> cartonGroups = new HashMap<>();
         for (Carton carton : mongo.find(Query.query(Criteria.where("buyerCode").is(BUYER)), Carton.class)) {
+            if (!selectedFactoryScope.matches(activeFactory, carton.getFactoryCode())) continue;
             if (clean(carton.getOrderId()).isEmpty() || clean(carton.getPoNumber()).isEmpty()) continue;
             cartonGroups.computeIfAbsent(key(carton.getOrderId(), carton.getPoNumber()), k -> new ArrayList<>()).add(carton);
         }
@@ -101,6 +106,7 @@ public class LululemonOperationsDashboardService {
             if (factory.isBlank()) factory = lines.stream().map(PurchaseOrder::getFactoryCode)
                     .filter(v -> !factory(v).isBlank()).map(LululemonOperationsDashboardService::factory)
                     .findFirst().orElse("");
+            if (!selectedFactoryScope.matches(activeFactory, factory)) continue;
             // Operations users only see their assigned factories. Unpicked/unassigned PO is visible to ADMIN/SALES.
             if (!unrestricted && (factory.isBlank() || !access.canAccessAssignedFactory(factory))) continue;
             boolean picked = claim != null || !owner.isBlank();
@@ -109,12 +115,12 @@ public class LululemonOperationsDashboardService {
             int identified=0, wp=0,wf=0,rp=0,rf=0,ri=0,finalPass=0,attempted=0;
             for (Carton carton : cartons) {
                 if (!clean(carton.getSscc18()).isEmpty()) identified++;
-                if (yes(carton.getWeightStatus(), "PASS")) wp++;
-                if (yes(carton.getWeightStatus(), "FAILED") || yes(carton.getWeightStatus(), "HOLD")) wf++;
-                if (yes(carton.getRfidStatus(), "PASS")) rp++;
-                if (yes(carton.getRfidStatus(), "FAILED")) rf++;
+                if (yes(carton.getWeightStatus(), AppConstants.WeightStatus.PASS)) wp++;
+                if (yes(carton.getWeightStatus(), AppConstants.WeightStatus.FAILED) || yes(carton.getWeightStatus(), AppConstants.WeightStatus.HOLD)) wf++;
+                if (yes(carton.getRfidStatus(), AppConstants.RfidCheck.PASS)) rp++;
+                if (yes(carton.getRfidStatus(), AppConstants.RfidCheck.FAILED)) rf++;
                 if (yes(carton.getRfidStatus(), "SCANNING")) ri++;
-                if (yes(carton.getFinalCheckStatus(), "FINAL_PASS")) finalPass++;
+                if (yes(carton.getFinalCheckStatus(), AppConstants.FinalCheck.FINAL_PASS)) finalPass++;
                 boolean scanned = rfidAttempted(carton, rfidAttemptedCartons);
                 if (scanned) attempted++;
                 cartonRows.add(new CartonRow(carton.getOrderId(), carton.getPoNumber(), factory,
@@ -143,7 +149,8 @@ public class LululemonOperationsDashboardService {
                     rows.stream().mapToInt(PoRow::finalPass).sum()));
         }
         List<FactoryRow> factoryRows = new ArrayList<>();
-        for (String code : factories.list(AppConstants.Buyer.LULULEMON, false).stream().map(org.bsl.cartonloading.model.Factory::getCode).toList()) {
+        for (String code : factories.list(AppConstants.Buyer.LULULEMON, false).stream().map(Factory::getCode).toList()) {
+            if (!selectedFactoryScope.matches(activeFactory, code)) continue;
             if (!unrestricted && !access.canAccessAssignedFactory(code)) continue;
             List<PoRow> rows = poRows.stream().filter(p -> code.equals(p.factoryCode()) && p.picked()).toList();
             List<String> numbers = rows.stream().map(PoRow::poNumber).distinct().sorted().toList();

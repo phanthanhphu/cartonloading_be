@@ -9,9 +9,9 @@ import java.util.Set;
 
 /** Shared allowed system types. A type is a workflow, not a Buyer. */
 public final class SystemType {
-    public static final String RFID = "RFID";
-    public static final String UNRFID = "UNRFID";
-    public static final String FACTORY_USE_ONLY = "FACTORY_USE_ONLY";
+    public static final String RFID = AppConstants.SystemType.RFID;
+    public static final String UNRFID = AppConstants.SystemType.UNRFID;
+    public static final String FACTORY_USE_ONLY = AppConstants.SystemType.FACTORY_USE_ONLY;
     private static final Set<String> VALID = Set.of(RFID, UNRFID, FACTORY_USE_ONLY);
     private SystemType() { }
     public static String normalize(String value) {

@@ -17,7 +17,7 @@ public class CartonCheckingRecord {
     @Id private String id;
     private String buyerCode;
     @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
-    private String buyerKey = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
+    private String buyerKey = AppConstants.Buyer.LULULEMON;
     private String orderId;
     private String poId;
     private String poNumber;
@@ -28,6 +28,6 @@ public class CartonCheckingRecord {
     private String result;
     private String note;
     private String checkedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime checkedAt;
 }

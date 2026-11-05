@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.buyers.es.model;
 
+import org.bsl.cartonloading.buyers.es.support.CartonLifecycle;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -43,17 +44,17 @@ public class CartonScanTransaction {
     private String manualInspectionResult;
     private String inspectionNote;
     private String inspectedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime inspectedAt;
     private String completedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime completedAt;
     private String shippedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime shippedAt;
 
     public String getLifecycleStatus() {
-        return org.bsl.cartonloading.buyers.es.support.CartonLifecycle.state(
+        return CartonLifecycle.state(
                 factoryBarcode != null && !factoryBarcode.isBlank(),
                 inspectedAt != null || weighedAt != null || weightKg != null,
                 completedAt != null, shippedAt != null,
@@ -61,9 +62,9 @@ public class CartonScanTransaction {
     }
 
     public boolean isInspectionPassed() {
-        return org.bsl.cartonloading.buyers.es.support.CartonLifecycle.passed(weightStatus, manualInspectionResult);
+        return CartonLifecycle.passed(weightStatus, manualInspectionResult);
     }
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime factoryBarcodeAssignedAt;
 
     /** Client-generated identifier used to make a Zebra scan request idempotent. */
@@ -113,16 +114,16 @@ public class CartonScanTransaction {
     /** Admin correction metadata. Resetting weight never removes the assigned Factory Barcode. */
     private String lastCorrectionReason;
     private String lastCorrectedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime lastCorrectedAt;
 
     private String scannedBy;
     private String weighedBy;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime scannedAt;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime weighedAt;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
 }

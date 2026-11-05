@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.model;
 
+import org.bsl.cartonloading.common.importing.TextNormalizer;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -24,7 +25,7 @@ public class PurchaseOrder {
     private String buyerKey = AppConstants.Buyer.LULULEMON;
     /** User-driven PO ownership; separate from business PO status. */
     private String pickedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime pickedAt;
     /** Parent Packing Order for the order-scoped LULULEMON workflow. */
     private String orderId;
@@ -40,7 +41,7 @@ public class PurchaseOrder {
     private String sku;
     private String skuAssignedBy;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime skuAssignedAt;
 
     private Integer plannedCartons;
@@ -72,17 +73,19 @@ public class PurchaseOrder {
     private Double netWeightKg;
     private Double grossWeightKg;
 
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate hod;
 
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate exFtyDate;
 
     /** Shipping allocation date chosen by Sales; independent from ALL_BP HOD / Ex-Factory fields. */
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate plannedShippingDate;
+    /** Multiple shipping dates for the same logical PO. The legacy plannedShippingDate remains a summary. */
+    private List<LocalDate> shippingDates = new ArrayList<>();
     private String shippingScheduledBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime shippingScheduledAt;
 
     private String status;
@@ -93,13 +96,13 @@ public class PurchaseOrder {
     private String rfidReviewStatus;
     private String weighingStationCode;
     private String weighingStartedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime weighingStartedAt;
     private String weighingStoppedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime weighingStoppedAt;
     private String weighingCompletedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime weighingCompletedAt;
 
     private String sourceFileName;
@@ -107,9 +110,9 @@ public class PurchaseOrder {
     private String createdBy;
     private String updatedBy;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
     /**
      * Legacy All_BP imports might have retained Size only in the raw source rows,
@@ -124,7 +127,7 @@ public class PurchaseOrder {
         for (Map<String, String> rawRow : allBpRows) {
             if (rawRow == null) continue;
             for (Map.Entry<String, String> cell : rawRow.entrySet()) {
-                String header = org.bsl.cartonloading.common.importing.TextNormalizer.headerKey(cell.getKey());
+                String header = TextNormalizer.headerKey(cell.getKey());
                 if (!java.util.Set.of("SIZE", "SIZES", "GARMENTSIZE", "APPARELSIZE", "PRODUCTSIZE").contains(header)) continue;
                 String value = cell.getValue() == null ? null : cell.getValue().trim();
                 if (value == null || value.isEmpty()) continue;

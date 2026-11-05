@@ -22,25 +22,29 @@ public class PackingOrder {
     @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
     private String buyerKey;
 
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate orderDate;
 
-    @JsonFormat(pattern = "yyyy-MM-dd")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE)
     private LocalDate endOrderDate;
 
     private String orderName;
+    /** Canonical Order identity for LULULEMON; missing on legacy/ES records. */
+    private String orderNameKey;
     private String supplierName;
     private String supplierNumber;
     private String productionFacility;
     /** LULULEMON order ownership; not a free-text production facility. */
     private String factoryCode;
+    /** Prevent imports while an Admin cascade-delete is running or requires a retry. */
+    private String deletionState;
 
     private String createdBy;
     private String updatedBy;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
 }

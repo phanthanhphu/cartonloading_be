@@ -1,5 +1,6 @@
 package org.bsl.cartonloading.service;
 
+import org.bsl.cartonloading.security.WorkspaceSession;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.es.enums.CartonScanStatus;
@@ -38,7 +39,7 @@ public class CartonDashboardService {
     public DashboardSummary summary() {
         User user = currentUser();
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !(authentication.getDetails() instanceof org.bsl.cartonloading.security.WorkspaceSession session))
+        if (authentication == null || !(authentication.getDetails() instanceof WorkspaceSession session))
             throw new org.springframework.security.access.AccessDeniedException("Select a Buyer and Type at login");
         List<String> buyerCodes = List.of(session.buyer());
         List<DashboardSummary.BuyerSummary> rows = new ArrayList<>();

@@ -14,6 +14,7 @@ import org.bsl.cartonloading.buyers.lululemon.repository.RfidScanSessionReposito
 import org.bsl.cartonloading.buyers.lululemon.repository.ShippingScheduleRepository;
 import org.bsl.cartonloading.buyers.lululemon.model.ShippingSchedule;
 import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 import org.bsl.cartonloading.service.RequestActor;
 import org.springframework.stereotype.Service;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -39,11 +40,14 @@ public class LululemonRfidService {
     private final ShippingScheduleRepository shippingSchedules;
     private final ShippingScheduleService shippingScheduleService;
     private final MongoTemplate mongoTemplate;
+    private final AppSocketPublisher socketPublisher;
+    private final LululemonHistoryProjectionService historyProjection;
 
     public LululemonRfidService(RfidScanSessionRepository sessions, CartonRepository cartons,
                                CartonItemRepository items, PurchaseOrderRepository pos, BuyerFactoryAccessService factoryAccess,
                                ShippingScheduleRepository shippingSchedules, ShippingScheduleService shippingScheduleService,
-                               MongoTemplate mongoTemplate) {
+                               MongoTemplate mongoTemplate, AppSocketPublisher socketPublisher,
+                               LululemonHistoryProjectionService historyProjection) {
         this.sessions = sessions;
         this.cartons = cartons;
         this.items = items;
@@ -52,6 +56,8 @@ public class LululemonRfidService {
         this.shippingSchedules = shippingSchedules;
         this.shippingScheduleService = shippingScheduleService;
         this.mongoTemplate = mongoTemplate;
+        this.socketPublisher = socketPublisher;
+        this.historyProjection = historyProjection;
     }
 
     private Carton requireCarton(String orderId, String poId, String sscc) {
@@ -121,7 +127,7 @@ public class LululemonRfidService {
             }
             return previous;
         }
-        if (previous != null && "PASS".equals(previous.getStatus())) {
+        if (previous != null && AppConstants.RfidCheck.PASS.equals(previous.getStatus())) {
             throw new IllegalArgumentException("Carton already passed RFID. A supervisor must reopen it before rescan.");
         }
         RfidScanSession session = new RfidScanSession();
@@ -142,8 +148,13 @@ public class LululemonRfidService {
         carton.setRfidStatus("SCANNING");
         carton.setRfidVerifiedQty(null);
         carton.setRfidSessionId(session.getId());
+        // Last-activity timestamp lets History show an RFID-only carton as recently processed.
+        // No weight/RFID pass/fail calculation is changed.
+        carton.setUpdatedAt(LocalDateTime.now());
+        carton.setUpdatedBy(RequestActor.current());
         cartons.save(carton);
         refreshRfidReview(orderId, poId);
+        socketPublisher.cartonLoadingChanged("RFID_STARTED", carton.getId());
         return session;
     }
 
@@ -246,15 +257,21 @@ public class LululemonRfidService {
         if (!Objects.equals(session.getExpectedQty(), session.getActualQty())) {
             errors.add("RFID quantity " + session.getActualQty() + "/" + session.getExpectedQty());
         }
-        if (!session.getWrongSkuEpcs().isEmpty()) errors.add("Wrong SKU: " + session.getWrongSkuEpcs().size());
+        // Operator "Wrong SKU" includes unique unsupported tags, NOT repeated PDA reads.
+        // Preserve invalidReads separately for audit and do not change PASS/FAILED conditions.
+        int wrongSkuIncludingUnsupported = RfidScanIssueCounts.wrongSkuIncludingUnsupported(
+                session.getWrongSkuEpcs(), session.getInvalidReads());
+        int unsupportedUnique = RfidScanIssueCounts.uniqueUnsupportedCount(session.getInvalidReads());
+        if (wrongSkuIncludingUnsupported > 0) errors.add("Wrong SKU: " + wrongSkuIncludingUnsupported
+                + " unique tag(s)" + (unsupportedUnique > 0 ? " (including " + unsupportedUnique + " unsupported)" : ""));
         if (!session.getCrossCartonEpcs().isEmpty()) errors.add("EPC already in another carton: " + session.getCrossCartonEpcs().size());
         if (!session.getInvalidReads().isEmpty()) errors.add("Invalid/unsupported EPC reads: " + session.getInvalidReads().size());
         List<CartonItem> itemSlots = items.findByCartonIdOrderByItemNoAsc(carton.getId());
         if (itemSlots.size() != session.getExpectedQty()) {
             errors.add("Carton item slots " + itemSlots.size() + "/" + session.getExpectedQty());
         }
-        String status = errors.isEmpty() ? "PASS" : "FAILED";
-        if ("PASS".equals(status)) {
+        String status = errors.isEmpty() ? AppConstants.RfidCheck.PASS : AppConstants.RfidCheck.FAILED;
+        if (AppConstants.RfidCheck.PASS.equals(status)) {
             // Slots are logical: EPCs are assigned deterministically, NOT claimed to represent
             // any physical scan order or a one-to-one barcode scan event.
             List<String> uniqueSortedEpcs = new ArrayList<>(session.getEpcs());
@@ -278,9 +295,14 @@ public class LululemonRfidService {
         carton.setRfidStatus(status);
         carton.setRfidVerifiedQty(session.getActualQty());
         carton.setRfidSessionId(session.getId());
-        carton.setRfidVerifiedAt("PASS".equals(status) ? session.getFinishedAt() : null);
+        carton.setRfidVerifiedAt(AppConstants.RfidCheck.PASS.equals(status) ? session.getFinishedAt() : null);
+        // Last-activity timestamp lets History show an RFID-only carton as recently processed.
+        // No weight/RFID pass/fail calculation is changed.
+        carton.setUpdatedAt(LocalDateTime.now());
+        carton.setUpdatedBy(RequestActor.current());
         cartons.save(carton);
         refreshRfidReview(orderId, poId);
+        socketPublisher.cartonLoadingChanged("RFID_" + status, carton.getId());
         return session;
     }
 
@@ -310,7 +332,10 @@ public class LululemonRfidService {
         carton.setRfidSessionId(reset.getId());
         carton.setRfidVerifiedQty(null);
         carton.setRfidVerifiedAt(null);
+        carton.setUpdatedAt(LocalDateTime.now());
+        carton.setUpdatedBy(RequestActor.current());
         cartons.save(carton);
+        historyProjection.removeCurrent(carton);
         List<CartonItem> itemSlots = items.findByCartonIdOrderByItemNoAsc(carton.getId());
         for (CartonItem slot : itemSlots) {
             slot.setRfidStatus(AppConstants.RfidStatus.WAITING_RFID);
@@ -320,6 +345,7 @@ public class LululemonRfidService {
         }
         if (!itemSlots.isEmpty()) items.saveAll(itemSlots);
         refreshRfidReview(orderId, poId);
+        socketPublisher.cartonLoadingChanged("RFID_REOPENED", carton.getId());
         return reset;
     }
 

@@ -18,7 +18,7 @@ public class WeightProfile {
     private String id;
     private String buyerCode;
     @org.springframework.data.mongodb.core.mapping.Field("buyer_key")
-    private String buyerKey = org.bsl.cartonloading.common.constants.AppConstants.Buyer.LULULEMON;
+    private String buyerKey = AppConstants.Buyer.LULULEMON;
     private String orderId;
     private String poId;
     private String poNumber;
@@ -30,9 +30,9 @@ public class WeightProfile {
     /** Absolute +/- tolerance in kilograms. */
     private BigDecimal toleranceKg;
     private String updatedBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime updatedAt;
     private String createdBy;
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime createdAt;
 }
