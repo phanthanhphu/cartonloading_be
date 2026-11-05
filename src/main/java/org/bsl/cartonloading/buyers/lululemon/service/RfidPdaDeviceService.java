@@ -188,7 +188,8 @@ public class RfidPdaDeviceService {
         }
         RfidPdaDevice config = configs.findById(serial).orElse(null);
         if (config == null) {
-            requireOnline(serial); // New device must be physically discovered by ADB.
+            // Save is configuration-only: ADB may be unavailable or the PDA may be offline.
+            // Online authorization is enforced when an actual RFID capture starts.
             config = new RfidPdaDevice();
             config.setSerial(serial);
         }
@@ -280,7 +281,8 @@ public class RfidPdaDeviceService {
         if (configs.findAll().stream().anyMatch(d -> !oldSerial.equals(d.getSerial())
                 && assignedFactories(d).contains(factory)))
             throw new IllegalArgumentException("Factory has multiple assigned readers. Resolve duplicates first.");
-        requireOnline(newSerial); // No registration of an offline/unauthorized ADB address.
+        // Rebinding configuration also works offline. ADB authorization is enforced
+        // at capture time, not when updating saved Factory assignments.
 
         boolean anyCoordinate = settings.startX() != null || settings.startY() != null
                 || settings.stopX() != null || settings.stopY() != null;
@@ -333,7 +335,8 @@ public class RfidPdaDeviceService {
                 "RFID reader replaced for Factory " + factory, AppConstants.Buyer.LULULEMON, factory,
                 Map.of("serial", oldSerial, "label", String.valueOf(previous.getLabel())),
                 Map.of("serial", newSerial, "label", replacement.getLabel()), null, null);
-        return asDevice(replacement, "device", factory);
+        // Never report CONNECTED merely because a replacement configuration was saved.
+        return asDevice(replacement, null, factory);
     }
 
     public synchronized Device setDefault(String factoryCode, String serial) {
