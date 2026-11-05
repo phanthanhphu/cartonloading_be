@@ -527,3 +527,123 @@ prism mock http://localhost:8083/v3/api-docs -p 4010
 | Đổi format lỗi ApiError | 3 ngày | Notify FE team + có migration interceptor FE |
 
 → **Mọi tranh chấp về contract / field nghĩa là gì → mở Swagger UI / file này làm chuẩn cuối cùng.**
+
+
+# README – Kết nối RFID PDA từ máy Client tới Carton Loading Web
+
+**Áp dụng:** Máy chủ A chạy Carton Loading (React + Spring Boot). PDA PM86 cắm USB vào máy Client B/C, sau đó Server kết nối đến PDA qua ADB TCP/IP trong **mạng LAN thử nghiệm được kiểm soát**.
+
+## 0. Phân biệt IP / Serial
+
+| Thành phần | Ví dụ đã thử thành công | Ghi chú |
+|---|---|---|
+| Máy chủ A | `10.232.132.47` | Chạy Backend/Web và lệnh `adb connect` |
+| Máy Client B | `10.232.132.67` | Máy nhân viên cắm PDA qua USB |
+| PDA của Client B | `10.232.132.111` | IP **Wi-Fi của PDA**, không phải IP máy Client |
+| Serial USB của PDA B | `25251A0286` | Đọc bằng `adb devices -l` trên Client |
+| ADB Serial lưu trên Web | `10.232.132.111:5555` | IP PDA + cổng ADB TCP/IP |
+
+**Đối với máy Client C hoặc PDA mới:** Phải tự lấy **USB Serial và IP PDA**, không sao chép các giá trị ví dụ của máy B.
+
+## 1. Trên máy Client – Cắm PDA qua USB
+
+1. Cắm PDA vào USB, bật **USB Debugging** trên PDA và chọn **Allow / Cho phép** nếu được hỏi.
+2. Mở CMD tại thư mục `platform-tools` chứa `adb.exe`.
+3. Kiểm tra Serial và trạng thái:
+
+```cmd
+adb devices -l
+```
+
+Phải thấy `device`, ví dụ `25251A0286    device`. Nếu thấy `unauthorized`, cấp quyền trên màn hình PDA.
+
+4. Lấy địa chỉ Wi-Fi **của PDA**, thay `25251A0286` bằng USB Serial thực tế:
+
+```cmd
+adb -s 25251A0286 shell ip -f inet addr show wlan0
+```
+
+Ví dụ kết quả: `inet 10.232.132.111/24`. IP PDA ở đây là `10.232.132.111`.
+
+5. Bật ADB TCP/IP trên PDA (chỉ dùng mạng LAN thử nghiệm tin cậy):
+
+```cmd
+adb -s 25251A0286 tcpip 5555
+```
+
+Kết quả mong đợi: `restarting in TCP mode port: 5555`.
+
+## 2. Trên Server A – Kết nối đến PDA
+
+1. Mở CMD trong thư mục chứa `adb.exe` **trên Server**. Ví dụ thư mục đã dùng:
+
+```cmd
+cd /d "D:\Project Carton\PLC Java -Jar\Ket_noi_PDA_platform-tools"
+```
+
+2. Chạy lệnh với **IP của PDA thực tế** (ví dụ PDA B):
+
+```cmd
+adb connect 10.232.132.111:5555
+adb devices -l
+adb -s 10.232.132.111:5555 get-state
+```
+
+Kết quả mong đợi: `10.232.132.111:5555    device` và `get-state` trả về `device`.
+
+Nếu có nhiều PDA ở nhiều Factory, chạy `adb connect` riêng cho **mỗi IP PDA**. Nếu Spring Boot chạy dưới tài khoản Windows khác / service / container, môi trường chạy Backend cũng phải dùng được ADB và nhận ra các PDA.
+
+## 3. Trên Carton Loading Web – Hướng dẫn nhập UI
+
+**Bước 1 – Chọn đúng Factory:** Đăng nhập Web Carton Loading → Buyer **LULULEMON** → menu **Device Management**. Trong **Factory List**, tìm dòng Factory cần gán PDA (ví dụ **F3**).
+
+**Bước 2 – Mở popup RFID:** Tại cột **RFID Reader** của dòng Factory, bấm biểu tượng **cài đặt** để mở **RFID Connection**.
+
+- **Chưa có RFID:** Popup hiển thị form để tạo cấu hình.
+- **Đã có RFID:** Popup hiển thị thông tin đã lưu; bấm **Edit** để thay đổi.
+
+**Bước 3 – Nhập các trường:**
+
+| Trường trên popup | Cách nhập | Ví dụ cho F3 |
+|---|---|---|
+| **ADB Serial \*** | **IP Wi-Fi của PDA** + `:5555` | `10.232.132.111:5555` |
+| **Reader Name \*** | Tên nhận diện PDA | `RF88 - Packing 03` |
+| **Factory** | Hệ thống tự chọn theo dòng Factory, không cần sửa | `F3` |
+| **STARTX, STARTY, STOPX, STOPY** | Giữ giá trị đã thử hoạt động; đây là tọa độ thao tác ứng dụng trên PDA, **không phải IP/port** | `464, 1440, 464, 1440` (chỉ là giá trị của PDA B) |
+| **Assigned Weight Check Users** | Chọn User được phép dùng PDA cho Factory này, khi có phân công | Theo danh sách User của Factory |
+
+**Quan trọng:** Trường **ADB Serial** trên Web phải trùng với chuỗi hiển thị trong `adb devices -l` **trên Server**, ví dụ `10.232.132.111:5555`. Không nhập IP của máy Client `10.232.132.67`, không nhập USB Serial `25251A0286` nếu Backend đang kết nối qua Wi-Fi.
+
+**Bước 4 – Test:** Bấm **Test** (góc dưới bên trái). Chờ thông báo:
+
+```text
+ADB detected: 10.232.132.111:5555. RFID inventory was not started.
+```
+
+Thông báo này nghĩa là **Backend nhìn thấy PDA**, chưa đồng nghĩa đã quét được RFID. Nếu hiện Offline, kiểm tra kết nối ADB của Server trước khi Save.
+
+**Bước 5 – Save:** Nếu Test thành công, bấm **Save** (góc dưới bên phải). Đóng popup, mở lại để xác nhận ADB Serial mới đã được lưu. Khi thay Serial của Factory đã có RFID, đây là **thay thiết bị**, không tạo RFID thứ hai; tránh làm khi có phiên quét đang hoạt động.
+
+**Bước 6 – Kiểm tra quét thực tế:** Mở **Orders → PO của Factory → Scan RFID / Weight** → nhập/quét SSCC-18 và SKU theo quy trình hiện hành → kiểm tra RFID Reader **Connected** → bấm **START PDA** → thử đọc EPC → bấm **STOP PDA**. Chỉ kết luận thành công hoàn toàn khi dữ liệu EPC xuất hiện trên Web.
+
+## 4. Xử lý lỗi nhanh
+
+| Hiện tượng | Cách kiểm tra |
+|---|---|
+| `adb` không nhận lệnh trên CMD | Mở CMD tại thư mục `platform-tools` có `adb.exe` |
+| `unauthorized` | Mở PDA và cấp quyền USB Debugging |
+| USB Serial `device not found` | Trên Client chạy `adb devices -l`, lấy Serial đúng |
+| `adb get-state` với IP báo `device not found` | Trên **Server** chạy `adb connect IP_PDA:5555` trước rồi thử lại |
+| Server báo `offline` / timeout | PDA phải cùng mạng có thể định tuyến; kiểm tra IP mới, Wi-Fi, TCP 5555, Firewall và ADB đã bật TCP/IP |
+| CMD Server thấy `device` nhưng Web Test báo Offline | Kiểm tra tài khoản chạy Backend, đường dẫn `adb.exe`, ADB Serial đã nhập trên Web và môi trường service/Docker |
+| Test báo `ADB detected` nhưng không thấy EPC | Thử **START PDA**, kiểm tra ứng dụng RFID, tọa độ điều khiển, quyền User và thao tác quét thực tế |
+| PDA khởi động lại / đổi Wi-Fi | Có thể cần bật lại ADB TCP/IP trên Client, kết nối lại Server, cập nhật IP trên Web nếu đổi |
+
+## 5. Lưu ý bảo mật và vận hành
+
+- Chế độ ADB TCP/IP truyền thống trên cổng **5555** chỉ nên dùng trong LAN thử nghiệm cô lập, **không mở ra Internet**. Khi triển khai rộng, ưu tiên Local RFID Agent có xác thực hoặc cơ chế ADB bảo mật phù hợp.
+- Để tránh đổi IP, nên đặt DHCP Reservation cho từng PDA.
+- Thiết kế hiện tại giới hạn **một RFID Reader cho mỗi Factory**. PDA cho Factory khác phải được gán ở **dòng Factory khác**.
+- Khi ngừng thử nghiệm, tắt ADB TCP/IP theo quy trình thiết bị (chẳng hạn kết nối USB rồi chạy `adb usb`).
+
+**Tóm tắt 1 dòng:** **Client:** USB PDA → `adb devices` → lấy IP PDA → `adb tcpip 5555` → **Server:** `adb connect IP_PDA:5555` → **Web:** Device Management → Factory → RFID → Edit → nhập **ADB Serial + Reader Name** → **Test → Save** → Carton Weighing → **START PDA**.

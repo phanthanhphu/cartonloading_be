@@ -36,7 +36,7 @@ public class RfidPdaManagementController {
     @PreAuthorize(AppConstants.SecurityExpression.BUYER_ADMIN)
     public RfidPdaDeviceService.Device test(
             @PathVariable String buyer, @PathVariable String serial) {
-        var device = service.forBuyer(buyer, impl -> impl.managementDevices()).stream()
+        var device = service.forBuyer(buyer, impl -> impl.managementDevicesWithDiscovery()).stream()
                 .filter(d -> serial.equals(d.serial())).findFirst().orElse(null);
         boolean online = device != null && device.online();
         status.readerObserved(serial, online ? AppConstants.DeviceConnection.CONNECTED : AppConstants.DeviceConnection.DISCONNECTED,

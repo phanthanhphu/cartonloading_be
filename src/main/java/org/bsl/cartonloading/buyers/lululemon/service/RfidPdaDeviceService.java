@@ -131,7 +131,7 @@ public class RfidPdaDeviceService {
     public List<Device> devices(String stationCode, String factoryCode) {
         station(stationCode);
         String factory = factory(factoryCode);
-        Map<String, String> online = connectedDevices();
+        Map<String, String> online = connectedDevicesOrEmpty();
         List<Device> result = new ArrayList<>();
         for (RfidPdaDevice config : configs.findAll()) {
             Set<String> assigned = assignedFactories(config);
@@ -143,9 +143,17 @@ public class RfidPdaDeviceService {
         return result;
     }
 
-    /** All saved readers plus all currently detected USB/ADB devices, in one global list. */
+    /** Load registered readers without probing hardware. Opening Device Management must not require ADB. */
     public List<Device> managementDevices() {
-        Map<String, String> online = connectedDevices();
+        return buildManagementDevices(Map.of());
+    }
+
+    /** Explicit Admin Test: discover all reachable PDA readers through ADB. */
+    public List<Device> managementDevicesWithDiscovery() {
+        return buildManagementDevices(connectedDevices());
+    }
+
+    private List<Device> buildManagementDevices(Map<String, String> online) {
         List<Device> result = new ArrayList<>();
         Set<String> listed = new LinkedHashSet<>();
         for (RfidPdaDevice config : configs.findAll()) {
@@ -239,7 +247,7 @@ public class RfidPdaDeviceService {
         }
         for (String code : wanted) ensureDefault(code);
         for (String code : previous) if (!wanted.contains(code)) ensureDefault(code);
-        return asDevice(configs.findById(serial).orElseThrow(), connectedDevices().get(serial), null);
+        return asDevice(configs.findById(serial).orElseThrow(), null, null);
     }
 
     /**
@@ -346,7 +354,7 @@ public class RfidPdaDeviceService {
             AppConstants.AuditResource.CARTON_LOADING, serial,
             "Default RFID Reader for Factory=" + factory, AppConstants.Buyer.LULULEMON, factory,
             java.util.Map.of("defaultReader", wasDefault), java.util.Map.of("defaultReader", true), null, null);
-        return asDevice(config, connectedDevices().get(serial), null);
+        return asDevice(config, null, null);
     }
 
     /** Unassign the Factory; old multi-Factory records are handled safely during migration. */
@@ -765,6 +773,15 @@ public class RfidPdaDeviceService {
         if (!"device".equals(connectedDevices().get(serial)))
             throw new IllegalArgumentException("PDA is offline or USB debugging is not authorized.");
     }
+    /** Status-only endpoint: missing ADB means OFFLINE, never HTTP 500. Actual scan operations remain strict. */
+    private Map<String, String> connectedDevicesOrEmpty() {
+        try {
+            return connectedDevices();
+        } catch (IllegalStateException adbUnavailable) {
+            return Map.of();
+        }
+    }
+
     private Map<String, String> connectedDevices() {
         String output = run(10, adb, "devices");
         Map<String, String> result = new LinkedHashMap<>();
