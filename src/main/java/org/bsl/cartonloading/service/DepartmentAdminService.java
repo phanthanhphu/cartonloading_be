@@ -80,6 +80,11 @@ public class DepartmentAdminService {
         repository.findByFactoryIgnoreCaseAndDivisionIgnoreCaseAndDepartmentNameIgnoreCase(factory, division, name)
                 .filter(other -> !other.getId().equals(id))
                 .ifPresent(other -> { throw new IllegalArgumentException(AppMessages.DEPARTMENT_ALREADY_EXISTS); });
+        // A Department already assigned to users cannot silently be moved to a different Factory.
+        // Such a move would invalidate existing User-to-Factory assignments.
+        if (!factory.equals(row.getFactory()) && userRepository.existsByDepartmentId(id)) {
+            throw new IllegalArgumentException("Department is assigned to Users. Reassign those Users before changing its Factory");
+        }
         java.util.Map<String, Object> before = audit.snapshot(row);
         row.setFactory(factory);
         row.setDivision(division);

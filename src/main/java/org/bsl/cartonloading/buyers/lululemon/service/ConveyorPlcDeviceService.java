@@ -165,19 +165,7 @@ public class ConveyorPlcDeviceService {
         java.util.Set<Integer> unique = new LinkedHashSet<>();
         for (int coil : coils) if (coil < 0 || coil > 65535 || !unique.add(coil))
             throw new IllegalArgumentException("Distinct 0-based coil offsets 0–65535 required");
-        LinkedHashSet<String> assigned = new LinkedHashSet<>();
-        if (s.assignedUserIds() != null) for (String userId : s.assignedUserIds()) {
-            if (userId == null || userId.isBlank())
-                throw new IllegalArgumentException("Conveyor assigned User ID is blank. Remove the invalid assignment in Edit Conveyor.");
-            User u = users.findById(userId).orElseThrow(() -> new IllegalArgumentException(
-                "Conveyor assigned User ID " + userId + " was not found. Remove this invalid ID in Edit Conveyor and Save again."));
-            if (!u.isEnabled() || !u.canAccessBuyer(AppConstants.Buyer.LULULEMON)
-                    || !u.canLululemonScanWeight() || !u.canAccessFactory(factory))
-                throw new IllegalArgumentException("Conveyor assigned User ID " + userId
-                    + " is disabled or lacks LULULEMON Weight Check / Factory " + factory
-                    + " permission. Review this assignment before saving.");
-            assigned.add(userId);
-        }
+        // User authorization is provided by User Management; ignore legacy per-device user assignment.
         // Never silently move a bound device to another Factory or packing Station.
         boolean boundElsewhere = bindings.findAll().stream().anyMatch(b -> b.isActive()
            && "CONVEYOR".equals(b.getDeviceRole()) && code.equals(b.getDeviceCode())
@@ -191,7 +179,7 @@ public class ConveyorPlcDeviceService {
         d.setHost(s.host().trim()); d.setPort(s.port());d.setUnitId(s.unitId());
         d.setCommandCoil(s.commandCoil());d.setMotorFeedbackCoil(s.motorFeedbackCoil());
         d.setRfidSensorCoil(s.rfidSensorCoil());d.setWeightSensorCoil(s.weightSensorCoil());
-        d.setFaultCoil(s.faultCoil());d.setEnabled(s.enabled());d.setAssignedUserIds(List.copyOf(assigned));
+        d.setFaultCoil(s.faultCoil());d.setEnabled(s.enabled());d.setAssignedUserIds(List.of());
         d.setRevision(currentRevision + 1L);
         ConveyorPlcDevice saved = devices.saveIfCurrent(d, currentRevision);
         audit.logChange(RequestActor.current(), "CONVEYOR_DEVICE_SETTINGS", AppConstants.AuditResource.CARTON_LOADING,
@@ -393,14 +381,13 @@ public class ConveyorPlcDeviceService {
     private ConveyorPlcDevice requireAllowed(String code) {
         ConveyorPlcDevice d=require(code);
         if (!d.isEnabled()) throw new IllegalArgumentException("Conveyor disabled");
-        if (!allowed(currentUser(),d)) throw new AccessDeniedException("Conveyor not assigned to this Factory/User");
+        if (!allowed(currentUser(),d)) throw new AccessDeniedException("User lacks Conveyor access for this Factory");
         selectedFactory.assertMatches(selectedFactory.requested(AppConstants.Buyer.LULULEMON), d.getFactoryCode());
         return d;
     }
     private static boolean allowed(User u, ConveyorPlcDevice d) {
         return u.isAdminRole() || (u.canLululemonScanWeight() && u.canAccessBuyer(AppConstants.Buyer.LULULEMON)
-          && u.canAccessFactory(d.getFactoryCode())
-          && d.getAssignedUserIds()!=null && d.getAssignedUserIds().contains(u.getId()));
+          && u.canAccessFactory(d.getFactoryCode()));
     }
     private User currentUser() {
         User u=users.findByEmail(RequestActor.current()).orElseThrow(()->new AccessDeniedException("Login required"));

@@ -69,9 +69,7 @@ public class ScalePlcDeviceService {
         this.selectedFactory = selectedFactory;
     }
 
-    /** Create one inactive-for-operators (unassigned) connected simulator for each active Factory.
-     * No user is granted device access automatically; an Admin must explicitly assign them.
-     */
+    /** Seed one simulator per Factory; operators access it through their User Management permission. */
     private synchronized void seedSimulators() {
         for (Factory factory : factories.list(AppConstants.Buyer.LULULEMON, false)) {
             String id = "SCALE-SIM-" + factory.getCode();
@@ -102,15 +100,14 @@ public class ScalePlcDeviceService {
             .sorted(Comparator.comparing(ScalePlcDevice::getStationCode)).toList();
     }
 
-    /** Users see assigned stations only, with no write access to their Modbus settings. */
+    /** Operators see enabled Factory stations when User Management permits Weight Check. */
     public List<AssignedStation> mine() {
         User user = currentUser();
         if (!user.canAccessBuyer(AppConstants.Buyer.LULULEMON)) return List.of();
         String activeFactory = selectedFactory.requested(AppConstants.Buyer.LULULEMON);
         return list().stream().filter(ScalePlcDevice::isEnabled)
             .filter(d -> selectedFactory.matches(activeFactory, d.getFactoryCode()))
-            .filter(d -> user.isAdminRole() || (user.canLululemonScanWeight() && user.canAccessFactory(d.getFactoryCode())
-                    && d.getAssignedUserIds() != null && d.getAssignedUserIds().contains(user.getId())))
+            .filter(d -> user.isAdminRole() || (user.canLululemonScanWeight() && user.canAccessFactory(d.getFactoryCode())))
             .map(d -> new AssignedStation(d.getStationCode(), d.getName(), d.getFactoryCode(), mode(d),
                     d.getStableRegisterAddress() != null)).toList();
     }
@@ -184,18 +181,7 @@ public class ScalePlcDeviceService {
             throw new IllegalArgumentException("Invalid 0-based stable register address");
         if (!Double.isFinite(s.kgPerUnit()) || s.kgPerUnit() <= 0 || s.kgPerUnit() > 1000)
             throw new IllegalArgumentException("Invalid kg-per-unit multiplier");
-        Set<String> assigned = new LinkedHashSet<>();
-        if (s.assignedUserIds() != null) for (String userId : s.assignedUserIds()) {
-            if (userId == null || userId.isBlank())
-                throw new IllegalArgumentException("Scale PLC assigned User ID is blank. Review the Assigned Weight Check Users field.");
-            User user = users.findById(userId).orElseThrow(() -> new IllegalArgumentException(
-                "Scale PLC assigned User ID " + userId + " was not found. Review Assigned Weight Check Users in the PLC editor."));
-            if (!user.isEnabled() || !user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
-                || !user.canLululemonScanWeight() || !user.canAccessFactory(factory))
-                throw new IllegalArgumentException("Scale PLC assigned User ID " + userId
-                    + " is disabled or lacks LULULEMON Weight Check / Factory " + factory + " permission.");
-            assigned.add(userId);
-        }
+        // Device access is governed by User Management, not legacy assignedUserIds.
         java.util.Map<String, Object> before = audit.snapshot(previous);
         ScalePlcDevice d = devices.findById(id).orElseGet(ScalePlcDevice::new);
         d.setStationCode(id);
@@ -205,10 +191,10 @@ public class ScalePlcDeviceService {
         d.setPort(s.port()); d.setUnitId(s.unitId()); d.setRegisterAddress(s.registerAddress());
         d.setEncoding(s.encoding()); d.setKgPerUnit(s.kgPerUnit()); d.setEnabled(s.enabled());
         d.setStableRegisterAddress(s.stableRegisterAddress());
-        d.setAssignedUserIds(List.copyOf(assigned));
+        d.setAssignedUserIds(List.of());
         ScalePlcDevice saved = devices.save(d);
         audit.logChange(RequestActor.current(), "SCALE_DEVICE_SETTINGS", AppConstants.AuditResource.CARTON_LOADING, id,
-            "Factory=" + factory + "; assigned users=" + assigned.size(), AppConstants.Buyer.LULULEMON, factory,
+            "Factory=" + factory + "; permissions managed in User Management", AppConstants.Buyer.LULULEMON, factory,
             before, saved, null, null);
         events.organizationChanged(AppConstants.OrganizationRealtime.USER, "SCALE_DEVICE_SETTINGS");
         return saved;
@@ -230,9 +216,8 @@ public class ScalePlcDeviceService {
         User user = currentUser();
         selectedFactory.assertMatches(selectedFactory.requested(AppConstants.Buyer.LULULEMON), d.getFactoryCode());
         if (!d.isEnabled()) throw new IllegalArgumentException("Station is disabled");
-        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(d.getFactoryCode())
-                || d.getAssignedUserIds() == null || !d.getAssignedUserIds().contains(user.getId())))
-            throw new org.springframework.security.access.AccessDeniedException("Station not assigned to this user");
+        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(d.getFactoryCode())))
+            throw new org.springframework.security.access.AccessDeniedException("User lacks Scale access for this Factory");
         if (SIMULATOR.equals(mode(d))) {
             BigDecimal kg = d.getSimulatedWeightKg();
             return new Reading(d.getStationCode(), d.getFactoryCode(), SIMULATOR, 0,
@@ -284,9 +269,8 @@ public class ScalePlcDeviceService {
         if (!d.isEnabled() || !MODBUS_TCP.equals(mode(d)) || d.getStableRegisterAddress() == null
                 || !d.getFactoryCode().equalsIgnoreCase(factoryCode))
             throw new IllegalArgumentException("Enabled Factory Modbus scale with stable register required");
-        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)
-                || d.getAssignedUserIds() == null || !d.getAssignedUserIds().contains(user.getId())))
-            throw new org.springframework.security.access.AccessDeniedException("Modbus scale not assigned to user");
+        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)))
+            throw new org.springframework.security.access.AccessDeniedException("User lacks Modbus scale access for this Factory");
         Instant now = Instant.now();
         // Same-carton re-arm preserves the latch and only extends the lease.
         Query same = new Query(Criteria.where("_id").is(code).and("activeCartonSscc").is(sscc));
@@ -308,9 +292,8 @@ public class ScalePlcDeviceService {
         selectedFactory.assertMatches(selectedFactory.requested(AppConstants.Buyer.LULULEMON), d.getFactoryCode());
         if (!d.isEnabled() || !MODBUS_TCP.equals(mode(d)) || !d.getFactoryCode().equalsIgnoreCase(factoryCode))
             throw new IllegalArgumentException("Wrong Factory Modbus scale");
-        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)
-                || d.getAssignedUserIds() == null || !d.getAssignedUserIds().contains(user.getId())))
-            throw new org.springframework.security.access.AccessDeniedException("Modbus scale not assigned");
+        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)))
+            throw new org.springframework.security.access.AccessDeniedException("User lacks Modbus scale access for this Factory");
         if (rfidFinishedAt == null || eventId == null || eventId.isBlank() || d.getModbusAt() == null
                 || !d.getModbusAt().isAfter(rfidFinishedAt.atZone(java.time.ZoneId.systemDefault()).toInstant()))
             throw new IllegalArgumentException("A fresh stable weight after RFID completion is required");
@@ -341,10 +324,9 @@ public class ScalePlcDeviceService {
         User user = currentUser();
         selectedFactory.assertMatches(selectedFactory.requested(AppConstants.Buyer.LULULEMON), d.getFactoryCode());
         if (!d.isEnabled() || !SIMULATOR.equals(mode(d)) || !d.getFactoryCode().equalsIgnoreCase(factoryCode))
-            throw new IllegalArgumentException("Enabled assigned Simulator for this Factory required");
-        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)
-                || d.getAssignedUserIds() == null || !d.getAssignedUserIds().contains(user.getId())))
-            throw new org.springframework.security.access.AccessDeniedException("Scale not assigned");
+            throw new IllegalArgumentException("Enabled Simulator for this Factory required");
+        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)))
+            throw new org.springframework.security.access.AccessDeniedException("User lacks Scale access for this Factory");
         Instant now = Instant.now();
         Query q = new Query(new Criteria().andOperator(Criteria.where("_id").is(code),
                 new Criteria().orOperator(Criteria.where("activeCartonSscc").is(sscc),
@@ -391,11 +373,10 @@ public class ScalePlcDeviceService {
         ScalePlcDevice d = require(code);
         User user = currentUser();
         selectedFactory.assertMatches(selectedFactory.requested(AppConstants.Buyer.LULULEMON), d.getFactoryCode());
-        if (!d.isEnabled() || !SIMULATOR.equals(mode(d))) throw new IllegalArgumentException("An assigned simulator is required");
+        if (!d.isEnabled() || !SIMULATOR.equals(mode(d))) throw new IllegalArgumentException("An enabled simulator is required");
         if (!d.getFactoryCode().equalsIgnoreCase(factoryCode)) throw new org.springframework.security.access.AccessDeniedException("Wrong Factory scale");
-        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(d.getFactoryCode())
-                || d.getAssignedUserIds() == null || !d.getAssignedUserIds().contains(user.getId())))
-            throw new org.springframework.security.access.AccessDeniedException("Simulator not assigned to user");
+        if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(d.getFactoryCode())))
+            throw new org.springframework.security.access.AccessDeniedException("User lacks Simulator access for this Factory");
         if (!sscc.equals(d.getActiveCartonSscc()) || !sscc.equals(d.getSimulatedCartonSscc())
                 || d.getActiveUntil() == null || !d.getActiveUntil().isAfter(Instant.now()))
             throw new IllegalArgumentException("Simulator event does not belong to this active carton");

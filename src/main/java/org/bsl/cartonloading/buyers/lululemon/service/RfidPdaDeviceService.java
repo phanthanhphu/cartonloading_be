@@ -135,7 +135,7 @@ public class RfidPdaDeviceService {
         List<Device> result = new ArrayList<>();
         for (RfidPdaDevice config : configs.findAll()) {
             Set<String> assigned = assignedFactories(config);
-            if (assigned.contains(factory) && canUseReader(config))
+            if (assigned.contains(factory))
                 result.add(asDevice(config, online.get(config.getSerial()), factory));
         }
         result.sort(Comparator.comparing(Device::defaultReader).reversed()
@@ -219,18 +219,7 @@ public class RfidPdaDeviceService {
         config.setLabel(label.isBlank() ? serial : label.substring(0, Math.min(label.length(), 80)));
         config.setStartX(settings.startX()); config.setStartY(settings.startY());
         config.setStopX(settings.stopX()); config.setStopY(settings.stopY());
-        if (settings.assignedUserIds() != null) {
-            Set<String> personIds = new LinkedHashSet<>();
-            for (String id : settings.assignedUserIds()) {
-                User user = users.findById(id).orElseThrow(() -> new IllegalArgumentException("RFID User not found"));
-                if (!user.isEnabled() || !user.canLululemonScanWeight()
-                        || !user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
-                        || wanted.stream().noneMatch(user::canAccessFactory))
-                    throw new IllegalArgumentException("RFID User must have Weight Check in an assigned Factory");
-                personIds.add(id);
-            }
-            config.setAssignedUserIds(new ArrayList<>(personIds));
-        }
+        config.setAssignedUserIds(List.of()); // User Management governs Scan/Weight permissions.
         Set<String> defaults = defaultFactories(config);
         defaults.retainAll(wanted);
         updateAssignments(config, wanted, defaults);
@@ -287,21 +276,11 @@ public class RfidPdaDeviceService {
         boolean anyCoordinate = settings.startX() != null || settings.startY() != null
                 || settings.stopX() != null || settings.stopY() != null;
         if (anyCoordinate) { point(settings.startX(), settings.startY()); point(settings.stopX(), settings.stopY()); }
-        Set<String> personIds = new LinkedHashSet<>();
-        if (settings.assignedUserIds() != null) for (String id : settings.assignedUserIds()) {
-            User user = users.findById(id)
-                    .orElseThrow(() -> new IllegalArgumentException("RFID User not found"));
-            if (!user.isEnabled() || !user.canLululemonScanWeight()
-                    || !user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
-                    || !user.canAccessFactory(factory))
-                throw new IllegalArgumentException("RFID User must have Weight Check for this Factory");
-            personIds.add(id);
-        }
         RfidPdaDevice replacement = new RfidPdaDevice();
         replacement.setSerial(newSerial);
         String label = settings.label() == null ? "" : settings.label().trim();
         replacement.setLabel(label.isBlank() ? newSerial : label.substring(0, Math.min(label.length(), 80)));
-        replacement.setAssignedUserIds(new ArrayList<>(personIds));
+        replacement.setAssignedUserIds(List.of());
         replacement.setStartX(settings.startX()); replacement.setStartY(settings.startY());
         replacement.setStopX(settings.stopX()); replacement.setStopY(settings.stopY());
         updateAssignments(replacement, Set.of(factory), Set.of(factory));
@@ -472,23 +451,10 @@ public class RfidPdaDeviceService {
                 config.getAssignedUserIds() == null ? List.of() : List.copyOf(config.getAssignedUserIds()));
     }
 
-    private boolean canUseReader(RfidPdaDevice device) {
-        List<String> ids = device.getAssignedUserIds();
-        if (ids == null || ids.isEmpty() || RequestActor.isAdmin()) return true;
-        return users.findByEmail(RequestActor.current())
-                .filter(User::isEnabled).map(user -> ids.contains(user.getId())).orElse(false);
-    }
-
-    private void assertReaderUser(RfidPdaDevice device) {
-        if (!canUseReader(device))
-            throw new org.springframework.security.access.AccessDeniedException("RFID Reader not assigned to your User");
-    }
-
     public synchronized CaptureResult start(String serial, String stationCode, String orderId, String poId,
                                              String sscc, String sessionId) {
         assertCartonScanning(orderId, poId, sscc, sessionId, stationCode);
         RfidPdaDevice config = requireConfigured(serial, orderId, poId, sscc);
-        assertReaderUser(config);
         requireOnline(serial);
         if (captureRepository.existsById(serial)) throw new IllegalArgumentException("Reader already reserved for a carton. Stop and import first.");
         if (captureRepository.existsBySessionId(sessionId))
@@ -527,7 +493,6 @@ public class RfidPdaDeviceService {
         Capture capture = requireCapture(serial, stationCode, orderId, poId, sscc, sessionId);
         if (capture.stopped()) return new CaptureResult(serial, sessionId, "STOP_TAP_SENT", "Already sent STOP.");
         RfidPdaDevice config = requireConfigured(serial, orderId, poId, sscc);
-        assertReaderUser(config);
         requireOnline(serial);
         tap(serial, config.getStopX(), config.getStopY());
         captureRepository.save(encodeCapture(serial, new Capture(capture.station(), capture.order(), capture.po(), capture.sscc(),

@@ -42,4 +42,32 @@ class UserFactoryScopeTest {
         assertTrue(user.canAccessWeighingFactory("F18"));
         assertFalse(user.canAccessWeighingFactory("F2"));
     }
+    @Test void usersInSameFactoryReceiveIndependentPermissionsAndDepartmentIsNotAnotherGrant() {
+        User scanner = new User();
+        scanner.setRole(AppConstants.Role.USER);
+        scanner.setBuyerPermissions(List.of(AppConstants.Buyer.LULULEMON));
+        scanner.setFactoryPermissions(List.of("F1"));
+        scanner.setDepartmentId("dept-f1");
+        scanner.setBuyerAccessPermissions(java.util.Map.of(AppConstants.Buyer.LULULEMON,
+                List.of(AppConstants.Permission.LULU_SCAN_RFID_SSCC_SKU_WEIGHT)));
+
+        User viewer = new User();
+        viewer.setRole(AppConstants.Role.USER);
+        viewer.setBuyerPermissions(List.of(AppConstants.Buyer.LULULEMON));
+        viewer.setFactoryPermissions(List.of("F1"));
+        viewer.setDepartmentId("dept-f1");
+        viewer.setBuyerAccessPermissions(java.util.Map.of(AppConstants.Buyer.LULULEMON,
+                List.of(AppConstants.Permission.LULU_VIEW_ONLY)));
+
+        assertTrue(scanner.canAccessFactory("F1"));
+        assertTrue(viewer.canAccessFactory("F1"));
+        assertFalse(scanner.canAccessFactory("F2"));
+        assertFalse(viewer.canAccessFactory("F2"));
+        assertTrue(scanner.canLululemonScanWeight());
+        assertFalse(viewer.canLululemonScanWeight());
+        // Department metadata never grants cross-Factory access or Scan rights.
+        viewer.setDepartmentId("dept-f2");
+        assertFalse(viewer.canAccessFactory("F2"));
+        assertFalse(viewer.canLululemonScanWeight());
+    }
 }

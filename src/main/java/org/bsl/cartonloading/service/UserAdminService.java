@@ -104,11 +104,19 @@ public class UserAdminService {
         Map<String, List<String>> priorBuyerGrants = user.getBuyerAccessPermissions();
         List<String> priorEsGrants = List.copyOf(user.getAccessPermissions());
         List<String> priorFactories = List.copyOf(user.getFactoryPermissions());
+        String priorDepartment = user.getDepartmentId();
         List<String> priorTypes = user.getBuyerTypePermissions().stream()
                 .map(value -> value.buyerCode() + ": " + String.join(", ", value.types())).toList();
         apply(user, request, false);
+        // Never let an Admin disable/demote the sole remaining ACTIVE administrator.
+        if (AppConstants.Role.ADMIN.equals(priorRole) && wasEnabled
+                && (!user.isAdminRole() || !user.isEnabled())
+                && userRepository.findAll().stream().noneMatch(other -> !id.equals(other.getId())
+                        && other.isAdminRole() && other.isEnabled())) {
+            throw new IllegalArgumentException("Cannot disable or demote the last enabled Administrator");
+        }
         List<String> changes = summarizeChange(user, wasEnabled, priorRole, priorBuyers,
-                priorBuyerGrants, priorEsGrants, priorFactories, priorTypes);
+                priorBuyerGrants, priorEsGrants, priorFactories, priorTypes, priorDepartment);
         user.setTokenVersion(user.getTokenVersion() + 1);
         user.setLastAccessChangeDetails(changes);
         user.setLastAccessChangeVersion(user.getTokenVersion());
@@ -131,7 +139,8 @@ public class UserAdminService {
 
     private static List<String> summarizeChange(User user, boolean wasEnabled, String priorRole,
             List<String> priorBuyers, Map<String, List<String>> priorBuyerGrants,
-            List<String> priorEsGrants, List<String> priorFactories, List<String> priorTypes) {
+            List<String> priorEsGrants, List<String> priorFactories, List<String> priorTypes,
+            String priorDepartment) {
         List<String> messages = new ArrayList<>();
         if (wasEnabled != user.isEnabled()) messages.add(user.isEnabled()
                 ? "Account enabled" : "Account disabled");
@@ -145,6 +154,8 @@ public class UserAdminService {
         }
         grantDiff(messages, "ENGELBERT STRAUSS / permissions", priorEsGrants, user.getAccessPermissions());
         grantDiff(messages, "Factory", priorFactories, user.getFactoryPermissions());
+        if (!Objects.equals(priorDepartment, user.getDepartmentId()))
+            messages.add("Department assignment changed");
         grantDiff(messages, "Buyer / Type", priorTypes, user.getBuyerTypePermissions().stream()
                 .map(value -> value.buyerCode() + ": " + String.join(", ", value.types())).toList());
         if (messages.isEmpty()) messages.add("Account details updated by administrator");
@@ -282,11 +293,13 @@ public class UserAdminService {
                 if (!user.getFactoryPermissions().contains(code))
                     throw new IllegalArgumentException("Weighing Factory must also be in assigned Factories: " + code);
             }
-            if (departmentId != null) {
-                String departmentFactory = departmentRepository.findById(departmentId).orElseThrow().getFactory();
-                if (!user.getFactoryPermissions().contains(departmentFactory))
-                    throw new IllegalArgumentException("Department Factory must belong to the User's assigned Factories");
-            }
+        }
+        if (!user.isAdminRole() && departmentId != null) {
+            // A Department is organisational metadata. It must never point at a Factory
+            // outside the User's assigned scope, even when the user has another Buyer.
+            String departmentFactory = departmentRepository.findById(departmentId).orElseThrow().getFactory();
+            if (!user.getFactoryPermissions().contains(departmentFactory))
+                throw new IllegalArgumentException("Department Factory must belong to the User's assigned Factories");
         }
         if (!user.isAdminRole() && user.getBuyerPermissions().isEmpty()) {
             throw new IllegalArgumentException(AppMessages.BUYER_PERMISSION_REQUIRED);

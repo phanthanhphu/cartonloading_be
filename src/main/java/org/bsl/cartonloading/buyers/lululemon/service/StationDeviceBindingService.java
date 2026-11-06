@@ -64,15 +64,13 @@ public class StationDeviceBindingService {
         List<DeviceView> result=new ArrayList<>();
         for (ConveyorPlcDevice d:conveyors.findAll()) {
             if (!BUYER.equalsIgnoreCase(d.getBuyerKey()) || !selectedFactory.matches(selected,d.getFactoryCode())) continue;
-            if (!u.isAdminRole() && (!u.canLululemonScanWeight() || !u.canAccessFactory(d.getFactoryCode())
-                || d.getAssignedUserIds()==null || !d.getAssignedUserIds().contains(u.getId()))) continue;
+            if (!u.isAdminRole() && (!u.canLululemonScanWeight() || !u.canAccessFactory(d.getFactoryCode()))) continue;
             result.add(new DeviceView(d.getDeviceCode(), d.getName(), d.getFactoryCode(), d.getStationCode(),
                 "CONVEYOR", d.getMode(), d.getProtocol(), d.isEnabled(), d.getCommissioningStatus()));
         }
         for (ScalePlcDevice d:scales.findAll()) {
             if (!BUYER.equalsIgnoreCase(d.getBuyerKey()) || !selectedFactory.matches(selected,d.getFactoryCode())) continue;
-            if (!u.isAdminRole() && (!u.canLululemonScanWeight() || !u.canAccessFactory(d.getFactoryCode())
-                || d.getAssignedUserIds()==null || !d.getAssignedUserIds().contains(u.getId()))) continue;
+            if (!u.isAdminRole() && (!u.canLululemonScanWeight() || !u.canAccessFactory(d.getFactoryCode()))) continue;
             String mode=ScalePlcDeviceService.SIMULATOR.equals(d.getConnectionType()) ? AppConstants.DeviceConnection.SIMULATOR : "REAL";
             result.add(new DeviceView(d.getStationCode(),d.getName(),d.getFactoryCode(),null,
                 "SCALE",mode,d.getConnectionType(),d.isEnabled(),"EXISTING"));
