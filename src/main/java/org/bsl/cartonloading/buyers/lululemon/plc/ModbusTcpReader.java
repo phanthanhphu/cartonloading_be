@@ -23,8 +23,17 @@ public final class ModbusTcpReader {
             socket.setSoTimeout(AppConstants.Plc.DEFAULT_READ_TIMEOUT_MS);
             try (DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                  DataInputStream in = new DataInputStream(socket.getInputStream())) {
-                out.writeShort(tx); out.writeShort(0); out.writeShort(6);
-                out.writeByte(unitId); out.writeByte(3); out.writeShort(address); out.writeShort(words);
+                // Send one complete Modbus TCP ADU in one socket write. Legacy
+                // ModbusPal can close a connection when a request is fragmented
+                // across several tiny socket writes on Linux. Request bytes and
+                // all read-only validation/weight calculations remain unchanged.
+                byte[] request = new byte[] {
+                    (byte) (tx >>> 8), (byte) tx, 0, 0, 0, 6,
+                    (byte) unitId, 3,
+                    (byte) (address >>> 8), (byte) address,
+                    (byte) (words >>> 8), (byte) words
+                };
+                out.write(request);
                 out.flush();
                 int responseTx = in.readUnsignedShort();
                 int protocol = in.readUnsignedShort();

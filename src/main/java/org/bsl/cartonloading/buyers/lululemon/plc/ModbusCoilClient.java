@@ -21,8 +21,19 @@ public final class ModbusCoilClient {
             socket.setSoTimeout(2500);
             try (DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                  DataInputStream in = new DataInputStream(socket.getInputStream())) {
-                out.writeShort(tx); out.writeShort(0); out.writeShort(pdu.length + 1);
-                out.writeByte(unit); out.write(pdu); out.flush();
+                // One complete TCP ADU per socket write. This preserves the
+                // original function/coil/Unit ID and write-command safety gates;
+                // only the transport packetization changes for legacy ModbusPal.
+                int requestLength = pdu.length + 1;
+                byte[] request = new byte[7 + pdu.length];
+                request[0] = (byte) (tx >>> 8);
+                request[1] = (byte) tx;
+                request[4] = (byte) (requestLength >>> 8);
+                request[5] = (byte) requestLength;
+                request[6] = (byte) unit;
+                System.arraycopy(pdu, 0, request, 7, pdu.length);
+                out.write(request);
+                out.flush();
                 int replyTx = in.readUnsignedShort(), protocol = in.readUnsignedShort();
                 int length = in.readUnsignedShort(), replyUnit = in.readUnsignedByte();
                 if (replyTx != tx || protocol != 0 || replyUnit != unit || length < 3 || length > 253)
