@@ -85,15 +85,24 @@ public class LululemonDeviceConnectionLifecycle {
             publishSafe(d.getFactoryCode(), "PLC", d.getStationCode(), "DISABLED", reason + ": device disabled");
             return;
         }
-        if (!ScalePlcDeviceService.MODBUS_TCP.equalsIgnoreCase(d.getConnectionType())) {
+        if (!ScalePlcDeviceService.MODBUS_TCP.equalsIgnoreCase(d.getConnectionType())
+                && !ScalePlcDeviceService.DELTA_SERIAL.equalsIgnoreCase(d.getConnectionType())) {
             publishSafe(d.getFactoryCode(), "PLC", d.getStationCode(), AppConstants.DeviceConnection.SIMULATOR,
                     reason + ": internal simulator (no physical PLC test)");
             return;
         }
         try {
-            var reading = scaleService.testConnection(scaleSettings(d));
+            // DELTA_SERIAL can be connected without any weighing indicator wired to PLC.
+            // Keep existing Modbus TCP / Simulator behaviour unchanged.
+            String resultDetail;
+            if (ScalePlcDeviceService.DELTA_SERIAL.equalsIgnoreCase(d.getConnectionType())) {
+                var plc = scaleService.testPlcConnection(scaleSettings(d));
+                resultDetail = plc.status() + " (scale / weight not tested)";
+            } else {
+                resultDetail = scaleService.testConnection(scaleSettings(d)).status();
+            }
             publishSafe(d.getFactoryCode(), "PLC", d.getStationCode(), AppConstants.DeviceConnection.CONNECTED,
-                    reason + ": " + reading.status());
+                    reason + ": " + resultDetail);
         } catch (Exception e) {
             publishSafe(d.getFactoryCode(), "PLC", d.getStationCode(), AppConstants.DeviceConnection.DISCONNECTED,
                     reason + ": " + safeError(e));
@@ -136,6 +145,14 @@ public class LululemonDeviceConnectionLifecycle {
             d.getUnitId() == request.unitId() && d.getRegisterAddress() == request.registerAddress() &&
             Objects.equals(d.getStableRegisterAddress(), request.stableRegisterAddress()) &&
             Objects.equals(d.getConnectionType(), request.connectionType()) &&
+            (!AppConstants.DeviceConnection.DELTA_SERIAL.equals(request.connectionType()) ||
+                (Objects.equals(ScalePlcDeviceService.serialLocation(d.getSerialConnectionLocation()),
+                    ScalePlcDeviceService.serialLocation(request.serialConnectionLocation())) &&
+                 Objects.equals(d.getSerialComPort(), request.serialComPort()) &&
+                 d.getSerialBaudRate() == request.serialBaudRate() &&
+                 d.getSerialDataBits() == request.serialDataBits() &&
+                 Objects.equals(d.getSerialParity(), request.serialParity()) &&
+                 d.getSerialStopBits() == request.serialStopBits())) &&
             Objects.equals(d.getEncoding(), request.encoding()) &&
             Double.compare(d.getKgPerUnit(), request.kgPerUnit()) == 0).isPresent();
     }
@@ -158,7 +175,9 @@ public class LululemonDeviceConnectionLifecycle {
         return new ScalePlcDeviceService.Settings(d.getStationCode(), d.getName(), d.getFactoryCode(),
                 d.getHost(), d.getPort(), d.getUnitId(), d.getRegisterAddress(), d.getEncoding(),
                 d.getKgPerUnit(), d.isEnabled(), d.getAssignedUserIds(),
-                d.getConnectionType(), d.getStableRegisterAddress());
+                d.getConnectionType(), d.getStableRegisterAddress(),
+                d.getSerialComPort(), d.getSerialBaudRate(), d.getSerialDataBits(),
+                d.getSerialParity(), d.getSerialStopBits(), d.getSerialConnectionLocation());
     }
 
     public static ConveyorPlcDeviceService.Settings conveyorSettings(ConveyorPlcDevice d) {

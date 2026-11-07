@@ -65,6 +65,37 @@ class LululemonDeviceConnectionLifecycleTest {
         verify(notifications).publishFresh(eq("F3"), eq("CONVEYOR"), eq("CONVEYOR-F3"), eq("STOPPED"), anyString());
     }
 
+    @Test void deltaSerialSavedProfileIsConnectedWithoutAnyWeightOrStableReads() throws IOException {
+        var serial = scale();
+        serial.setConnectionType("DELTA_SERIAL");
+        serial.setSerialComPort("COM8");
+        serial.setSerialBaudRate(9600);
+        serial.setSerialDataBits(7);
+        serial.setSerialParity("EVEN");
+        serial.setSerialStopBits(1);
+        serial.setStableRegisterAddress(null);  // no weighing indicator installed
+        when(scaleService.testPlcConnection(any())).thenReturn(new ScalePlcDeviceService.PlcConnectionCheck(
+            serial.getStationCode(), "F3", "DELTA_SERIAL", "COM8", 1,
+            true, "PLC CONNECTED / NO SCALE REQUIRED / READ ONLY", Instant.now()));
+        subject.afterScaleSaved(serial);
+        verify(scaleService, times(1)).testPlcConnection(argThat(cfg ->
+            "COM8".equals(cfg.serialComPort()) && cfg.stableRegisterAddress() == null));
+        verify(scaleService, never()).testConnection(any());
+        verify(notifications).publishFresh(eq("F3"), eq("PLC"), eq("SCALE-F3"),
+            eq("CONNECTED"), contains("scale / weight not tested"));
+    }
+
+    @Test void deltaSerialConnectionFailureDoesNotPretendPLCIsConnected() throws IOException {
+        var serial = scale();
+        serial.setConnectionType("DELTA_SERIAL");
+        serial.setSerialComPort("COM8");
+        when(scaleService.testPlcConnection(any())).thenThrow(new IOException("Modbus ASCII timeout/no reply"));
+        subject.afterScaleSaved(serial);
+        verify(notifications).publishFresh(eq("F3"), eq("PLC"), eq("SCALE-F3"),
+                eq("DISCONNECTED"), contains("timeout/no reply"));
+        verify(scaleService, never()).testConnection(any());
+    }
+
     @Test void savingConveyorNeverChangesScaleAndFailureOnlyChangesObservedStatus() throws IOException {
         var device = conveyor();
         when(conveyorService.testConnection(any())).thenThrow(new SocketTimeoutException("Read timed out"));

@@ -5,6 +5,8 @@ import org.bsl.cartonloading.model.Factory;
 import org.bsl.cartonloading.buyers.lululemon.model.ScalePlcDevice;
 import org.bsl.cartonloading.buyers.lululemon.repository.ScalePlcDeviceRepository;
 import org.bsl.cartonloading.buyers.lululemon.plc.ModbusTcpReader;
+import org.bsl.cartonloading.buyers.lululemon.plc.ModbusAsciiSerialReader;
+import org.bsl.cartonloading.buyers.lululemon.agent.ScaleAgentBroker;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.common.factory.FactoryCodes;
 import org.bsl.cartonloading.model.User;
@@ -44,21 +46,31 @@ public class ScalePlcDeviceService {
     private final AppSocketPublisher events;
     private final MongoTemplate mongo;
     private final SelectedFactoryScope selectedFactory;
+    private final ScaleAgentBroker agents;
     public static final String SIMULATOR = AppConstants.DeviceConnection.SIMULATOR;
     public static final String MODBUS_TCP = AppConstants.DeviceConnection.MODBUS_TCP;
+    public static final String DELTA_SERIAL = AppConstants.DeviceConnection.DELTA_SERIAL;
+    public static final String LOCAL_AGENT = "LOCAL_AGENT";
+    public static final String BACKEND_DIRECT = "BACKEND_DIRECT";
 
     public record Settings(String stationCode, String name, String factoryCode, String host, int port,
                            int unitId, int registerAddress, String encoding, double kgPerUnit,
-                           boolean enabled, List<String> assignedUserIds, String connectionType, Integer stableRegisterAddress) { }
+                           boolean enabled, List<String> assignedUserIds, String connectionType, Integer stableRegisterAddress,
+                           String serialComPort, int serialBaudRate, int serialDataBits,
+                           String serialParity, int serialStopBits, String serialConnectionLocation) { }
     public record AssignedStation(String stationCode, String stationName, String factoryCode, String connectionType,
                                   boolean stableConfigured) { }
     public record Reading(String stationCode, String factoryCode, String mode, long rawValue,
                           BigDecimal weightKg, Instant readAt, String status, String eventId, boolean stable, boolean consumed) { }
+    /** A valid Modbus ASCII response from D0 proves PLC communication, not a configured weighing scale. */
+    public record PlcConnectionCheck(String stationCode, String factoryCode, String mode,
+                                     String serialPort, int stationAddress, boolean connected,
+                                     String status, Instant checkedAt) { }
 
     public ScalePlcDeviceService(ScalePlcDeviceRepository devices, UserRepository users,
             FactoryCatalogService factories, AuditLogService audit, AppSocketPublisher events, MongoTemplate mongo,
             SelectedFactoryScope selectedFactory,
-            SharedDeviceConfigurationStore sharedDevices) {
+            SharedDeviceConfigurationStore sharedDevices, ScaleAgentBroker agents) {
         this.devices = devices;
         this.sharedDevices = sharedDevices;
         this.users = users;
@@ -67,6 +79,7 @@ public class ScalePlcDeviceService {
         this.events = events;
         this.mongo = mongo;
         this.selectedFactory = selectedFactory;
+        this.agents = agents;
     }
 
     /** Seed one simulator per Factory; operators access it through their User Management permission. */
@@ -112,6 +125,28 @@ public class ScalePlcDeviceService {
                     d.getStableRegisterAddress() != null)).toList();
     }
 
+    /**
+     * Read-only PLC-only handshake. No weighing indicator, Stable register or weight mapping is needed.
+     * D0 is a fixed, documented DVP data register, not a command or physical I/O.
+     * The response must have a valid station, function, length and LRC before reporting Connected.
+     * This does NOT arm a carton, change the database, or issue any Modbus writes.
+     */
+    public PlcConnectionCheck testPlcConnection(Settings s) throws IOException {
+        if (s == null) throw new IllegalArgumentException("PLC settings required");
+        String factory = s.factoryCode() == null ? "" : s.factoryCode().trim().toUpperCase(java.util.Locale.ROOT);
+        if (!FactoryCodes.isValid(factory)) throw new IllegalArgumentException("Invalid Factory code");
+        factories.requireActive(AppConstants.Buyer.LULULEMON, factory);
+        if (!DELTA_SERIAL.equals(s.connectionType()))
+            throw new IllegalArgumentException("PLC-only serial test requires DELTA_SERIAL type");
+        ModbusAsciiSerialReader.validateSettings(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+            s.serialParity(), s.serialStopBits(), s.unitId(), 0, AppConstants.Plc.UINT16);
+        // Read-only Modbus ASCII function 03, one word at D0 (address 0x1000).
+        // Deliberately IGNORE the value: it is NOT a weight.
+        readRegister(s, DELTA_SERIAL, 0, AppConstants.Plc.UINT16);
+        return new PlcConnectionCheck(s.stationCode(), factory, DELTA_SERIAL, s.serialComPort(),
+            s.unitId(), true, "PLC CONNECTED / NO SCALE REQUIRED / READ ONLY", Instant.now());
+    }
+
     /** Read only: validate connection against unsaved settings without database writes/arm/claim. */
     public Reading testConnection(Settings s) throws IOException {
         if (s == null) throw new IllegalArgumentException("PLC settings required");
@@ -124,10 +159,13 @@ public class ScalePlcDeviceService {
             return new Reading(s.stationCode(), factory, SIMULATOR, 0, null, Instant.now(),
                 "SIMULATOR CONFIGURATION VALID (no physical PLC tested)", null, false, false);
         }
-        if (!MODBUS_TCP.equals(mode)) throw new IllegalArgumentException("Invalid PLC connection type");
-        validatePrivateHost(s.host());
-        if (s.port() < 1 || s.port() > 65535 || s.unitId() < 0 || s.unitId() > 247)
-            throw new IllegalArgumentException("Invalid Modbus port or Unit ID");
+        if (!MODBUS_TCP.equals(mode) && !DELTA_SERIAL.equals(mode))
+            throw new IllegalArgumentException("Invalid PLC connection type");
+        if (MODBUS_TCP.equals(mode)) {
+            validatePrivateHost(s.host());
+            if (s.port() < 1 || s.port() > 65535 || s.unitId() < 0 || s.unitId() > 247)
+                throw new IllegalArgumentException("Invalid Modbus port or Unit ID");
+        }
         if (!List.of(AppConstants.Plc.INT16, AppConstants.Plc.UINT16, AppConstants.Plc.INT32, AppConstants.Plc.UINT32).contains(s.encoding()))
             throw new IllegalArgumentException("Invalid PLC encoding");
         int words = AppConstants.Plc.INT32.equals(s.encoding()) || AppConstants.Plc.UINT32.equals(s.encoding()) ? 2 : 1;
@@ -137,16 +175,24 @@ public class ScalePlcDeviceService {
             throw new IllegalArgumentException("Invalid kg multiplier");
         if (s.stableRegisterAddress() != null && (s.stableRegisterAddress() < 0 || s.stableRegisterAddress() >= 65536))
             throw new IllegalArgumentException("Invalid stable register address");
-        long raw = ModbusTcpReader.read(s.host().trim(), s.port(), s.unitId(), s.registerAddress(), s.encoding());
+        if (DELTA_SERIAL.equals(mode)) {
+            validateSerialLocation(s.serialConnectionLocation());
+            ModbusAsciiSerialReader.validateSettings(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+                s.serialParity(), s.serialStopBits(), s.unitId(), s.registerAddress(), s.encoding());
+            if (s.stableRegisterAddress() != null)
+                ModbusAsciiSerialReader.validateSettings(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+                    s.serialParity(), s.serialStopBits(), s.unitId(), s.stableRegisterAddress(), AppConstants.Plc.UINT16);
+        }
+        long raw = readRegister(s, mode, s.registerAddress(), s.encoding());
         BigDecimal kg = BigDecimal.valueOf(raw).multiply(BigDecimal.valueOf(s.kgPerUnit()))
             .setScale(3, RoundingMode.HALF_UP);
         if (s.stableRegisterAddress() == null) {
-            return new Reading(s.stationCode(), factory, MODBUS_TCP, raw, kg, Instant.now(),
+            return new Reading(s.stationCode(), factory, mode, raw, kg, Instant.now(),
                 "CONNECTED / READ ONLY / PREVIEW (no stable register)", null, false, false);
         }
-        long flag = ModbusTcpReader.read(s.host().trim(), s.port(), s.unitId(), s.stableRegisterAddress(), AppConstants.Plc.UINT16);
+        long flag = readRegister(s, mode, s.stableRegisterAddress(), AppConstants.Plc.UINT16);
         if (flag != 0 && flag != 1) throw new IllegalArgumentException("Scale PLC stable Holding Register returned " + flag + "; expected 0 or 1. Check Stable Register address and Unit ID.");
-        return new Reading(s.stationCode(), factory, MODBUS_TCP, raw, kg, Instant.now(),
+        return new Reading(s.stationCode(), factory, mode, raw, kg, Instant.now(),
             flag == 1 ? "CONNECTED / READ ONLY / STABLE" : "CONNECTED / READ ONLY / UNSTABLE",
             null, flag == 1, false);
     }
@@ -169,10 +215,19 @@ public class ScalePlcDeviceService {
         if (s.name() == null || s.name().isBlank() || s.name().length() > 100)
             throw new IllegalArgumentException("Enter station name (1–100 characters)");
         String type = s.connectionType() == null || s.connectionType().isBlank() ? MODBUS_TCP : s.connectionType().trim();
-        if (!SIMULATOR.equals(type) && !MODBUS_TCP.equals(type)) throw new IllegalArgumentException("Invalid connection type");
+        if (!SIMULATOR.equals(type) && !MODBUS_TCP.equals(type) && !DELTA_SERIAL.equals(type))
+            throw new IllegalArgumentException("Invalid connection type");
         if (MODBUS_TCP.equals(type)) validatePrivateHost(s.host());
-        if (s.port() < 1 || s.port() > 65535 || s.unitId() < 0 || s.unitId() > 247)
+        if (MODBUS_TCP.equals(type) && (s.port() < 1 || s.port() > 65535 || s.unitId() < 0 || s.unitId() > 247))
             throw new IllegalArgumentException("Invalid Modbus port or Unit ID");
+        if (DELTA_SERIAL.equals(type)) {
+            validateSerialLocation(s.serialConnectionLocation());
+            ModbusAsciiSerialReader.validateSettings(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+                s.serialParity(), s.serialStopBits(), s.unitId(), s.registerAddress(), s.encoding());
+            if (s.stableRegisterAddress() != null)
+                ModbusAsciiSerialReader.validateSettings(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+                    s.serialParity(), s.serialStopBits(), s.unitId(), s.stableRegisterAddress(), AppConstants.Plc.UINT16);
+        }
         int words = AppConstants.Plc.INT32.equals(s.encoding()) || AppConstants.Plc.UINT32.equals(s.encoding()) ? 2 : 1;
         if (!List.of(AppConstants.Plc.INT16, AppConstants.Plc.UINT16, AppConstants.Plc.INT32, AppConstants.Plc.UINT32).contains(s.encoding())
              || s.registerAddress() < 0 || s.registerAddress() + words > 65536)
@@ -181,6 +236,25 @@ public class ScalePlcDeviceService {
             throw new IllegalArgumentException("Invalid 0-based stable register address");
         if (!Double.isFinite(s.kgPerUnit()) || s.kgPerUnit() <= 0 || s.kgPerUnit() > 1000)
             throw new IllegalArgumentException("Invalid kg-per-unit multiplier");
+        // Do not carry an old carton reservation or a stable event across different PLC
+        // connection/register mappings. Completed carton/history records are untouched.
+        boolean changedPhysicalSource = previous != null && (
+            !type.equals(mode(previous)) ||
+            (MODBUS_TCP.equals(type) && (!java.util.Objects.equals(previous.getHost(), s.host())
+                || previous.getPort() != s.port())) ||
+            (DELTA_SERIAL.equals(type) && (!java.util.Objects.equals(serialLocation(previous.getSerialConnectionLocation()), serialLocation(s.serialConnectionLocation()))
+                || !java.util.Objects.equals(previous.getSerialComPort(), s.serialComPort())
+                || previous.getSerialBaudRate() != s.serialBaudRate()
+                || previous.getSerialDataBits() != s.serialDataBits()
+                || !java.util.Objects.equals(previous.getSerialParity(), s.serialParity())
+                || previous.getSerialStopBits() != s.serialStopBits())) ||
+            previous.getUnitId() != s.unitId() || previous.getRegisterAddress() != s.registerAddress() ||
+            !java.util.Objects.equals(previous.getStableRegisterAddress(), s.stableRegisterAddress()) ||
+            !java.util.Objects.equals(previous.getEncoding(), s.encoding()) ||
+            Double.compare(previous.getKgPerUnit(), s.kgPerUnit()) != 0);
+        if (changedPhysicalSource && previous.getActiveCartonSscc() != null &&
+                previous.getActiveUntil() != null && previous.getActiveUntil().isAfter(Instant.now()))
+            throw new IllegalArgumentException("Scale is reserved for an active carton. Finish its weighing before changing the connection type or register mapping.");
         // Device access is governed by User Management, not legacy assignedUserIds.
         java.util.Map<String, Object> before = audit.snapshot(previous);
         ScalePlcDevice d = devices.findById(id).orElseGet(ScalePlcDevice::new);
@@ -191,7 +265,20 @@ public class ScalePlcDeviceService {
         d.setPort(s.port()); d.setUnitId(s.unitId()); d.setRegisterAddress(s.registerAddress());
         d.setEncoding(s.encoding()); d.setKgPerUnit(s.kgPerUnit()); d.setEnabled(s.enabled());
         d.setStableRegisterAddress(s.stableRegisterAddress());
+        if (DELTA_SERIAL.equals(type)) {
+            d.setSerialConnectionLocation(serialLocation(s.serialConnectionLocation()));
+            d.setSerialComPort(s.serialComPort().startsWith("/dev/") ? s.serialComPort() : s.serialComPort().toUpperCase(java.util.Locale.ROOT));
+            d.setSerialBaudRate(s.serialBaudRate()); d.setSerialDataBits(s.serialDataBits());
+            d.setSerialParity(s.serialParity()); d.setSerialStopBits(s.serialStopBits());
+        }
         d.setAssignedUserIds(List.of());
+        if (changedPhysicalSource) {
+            d.setActiveCartonSscc(null); d.setActiveUntil(null);
+            d.setSimulatedCartonSscc(null); d.setSimulatedWeightKg(null);
+            d.setSimulatedAt(null); d.setSimulatedEventId(null); d.setSimulatedConsumedAt(null);
+            d.setModbusUnstableSeen(false); d.setModbusWeightKg(null);
+            d.setModbusAt(null); d.setModbusEventId(null); d.setModbusConsumedAt(null);
+        }
         ScalePlcDevice saved = devices.save(d);
         audit.logChange(RequestActor.current(), "SCALE_DEVICE_SETTINGS", AppConstants.AuditResource.CARTON_LOADING, id,
             "Factory=" + factory + "; permissions managed in User Management", AppConstants.Buyer.LULULEMON, factory,
@@ -223,14 +310,15 @@ public class ScalePlcDeviceService {
             return new Reading(d.getStationCode(), d.getFactoryCode(), SIMULATOR, 0,
                 kg, d.getSimulatedAt(), "SIMULATED / CONNECTED", d.getSimulatedEventId(), kg != null, d.getSimulatedConsumedAt() != null);
         }
-        validatePrivateHost(d.getHost());
-        long raw = ModbusTcpReader.read(d.getHost(), d.getPort(), d.getUnitId(), d.getRegisterAddress(), d.getEncoding());
+        String activeMode = mode(d);
+        if (MODBUS_TCP.equals(activeMode)) validatePrivateHost(d.getHost());
+        long raw = readRegister(d, d.getRegisterAddress(), d.getEncoding());
         BigDecimal kg = BigDecimal.valueOf(raw).multiply(BigDecimal.valueOf(d.getKgPerUnit())).setScale(3, RoundingMode.HALF_UP);
         // A stable flag is mandatory for auto-capture; old devices remain preview-only.
         if (d.getStableRegisterAddress() == null)
-            return new Reading(d.getStationCode(), d.getFactoryCode(), MODBUS_TCP, raw, kg, Instant.now(),
+            return new Reading(d.getStationCode(), d.getFactoryCode(), activeMode, raw, kg, Instant.now(),
                 "CONNECTED / PREVIEW ONLY (stable register not configured)", null, false, false);
-        long flag = ModbusTcpReader.read(d.getHost(), d.getPort(), d.getUnitId(), d.getStableRegisterAddress(), AppConstants.Plc.UINT16);
+        long flag = readRegister(d, d.getStableRegisterAddress(), AppConstants.Plc.UINT16);
         boolean stable = flag == 1;
         if (flag != 0 && flag != 1) throw new IllegalArgumentException("Scale PLC stable Holding Register returned " + flag + "; expected 0 or 1. Check Stable Register address and Unit ID.");
         Instant now = Instant.now();
@@ -249,14 +337,14 @@ public class ScalePlcDeviceService {
                 if (latched != null) d = latched;
             }
         }
-        return new Reading(d.getStationCode(), d.getFactoryCode(), MODBUS_TCP, raw, kg, now,
+        return new Reading(d.getStationCode(), d.getFactoryCode(), activeMode, raw, kg, now,
             stable ? "CONNECTED / STABLE" : "CONNECTED / UNSTABLE", d.getModbusEventId(), stable,
             d.getModbusConsumedAt() != null);
     }
 
     public boolean isModbus(String code) {
         ScalePlcDevice d = require(code);
-        return MODBUS_TCP.equals(mode(d));
+        return MODBUS_TCP.equals(mode(d)) || DELTA_SERIAL.equals(mode(d));
     }
 
     /** Arm only after an RFID attempt finished. Require a fresh 0->1 stable edge for each SSCC.
@@ -266,7 +354,7 @@ public class ScalePlcDeviceService {
         ScalePlcDevice d = require(code);
         User user = currentUser();
         selectedFactory.assertMatches(selectedFactory.requested(AppConstants.Buyer.LULULEMON), d.getFactoryCode());
-        if (!d.isEnabled() || !MODBUS_TCP.equals(mode(d)) || d.getStableRegisterAddress() == null
+        if (!d.isEnabled() || !isPhysical(mode(d)) || d.getStableRegisterAddress() == null
                 || !d.getFactoryCode().equalsIgnoreCase(factoryCode))
             throw new IllegalArgumentException("Enabled Factory Modbus scale with stable register required");
         if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)))
@@ -290,7 +378,7 @@ public class ScalePlcDeviceService {
         ScalePlcDevice d = require(code);
         User user = currentUser();
         selectedFactory.assertMatches(selectedFactory.requested(AppConstants.Buyer.LULULEMON), d.getFactoryCode());
-        if (!d.isEnabled() || !MODBUS_TCP.equals(mode(d)) || !d.getFactoryCode().equalsIgnoreCase(factoryCode))
+        if (!d.isEnabled() || !isPhysical(mode(d)) || !d.getFactoryCode().equalsIgnoreCase(factoryCode))
             throw new IllegalArgumentException("Wrong Factory Modbus scale");
         if (!user.isAdminRole() && (!user.canLululemonScanWeight() || !user.canAccessFactory(factoryCode)))
             throw new org.springframework.security.access.AccessDeniedException("User lacks Modbus scale access for this Factory");
@@ -302,7 +390,7 @@ public class ScalePlcDeviceService {
                 .and("modbusConsumedAt").is(null));
         ScalePlcDevice claimed = sharedDevices.findAndModifyScale(q, new Update().set("modbusConsumedAt", Instant.now()));
         if (claimed == null) throw new IllegalArgumentException("Modbus weight already used or belongs to another carton");
-        return new Reading(code, factoryCode, MODBUS_TCP, 0, claimed.getModbusWeightKg(),
+        return new Reading(code, factoryCode, mode(d), 0, claimed.getModbusWeightKg(),
                 claimed.getModbusAt(), "CAPTURED", eventId, true, true);
     }
 
@@ -311,8 +399,45 @@ public class ScalePlcDeviceService {
             new Update().unset("modbusConsumedAt"));
     }
 
+    private static boolean isPhysical(String type) { return MODBUS_TCP.equals(type) || DELTA_SERIAL.equals(type); }
+
     private static String mode(ScalePlcDevice d) {
-        return SIMULATOR.equals(d.getConnectionType()) ? SIMULATOR : MODBUS_TCP;
+        if (SIMULATOR.equals(d.getConnectionType())) return SIMULATOR;
+        if (DELTA_SERIAL.equals(d.getConnectionType())) return DELTA_SERIAL;
+        return MODBUS_TCP; // preserve legacy saved TCP profiles with missing type
+    }
+
+    /** A legacy/null location always means direct backend COM, preserving saved Factory settings. */
+    public static String serialLocation(String location) {
+        return location == null || location.isBlank() ? BACKEND_DIRECT : location.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private static void validateSerialLocation(String location) {
+        if (!BACKEND_DIRECT.equals(serialLocation(location)) && !LOCAL_AGENT.equals(serialLocation(location)))
+            throw new IllegalArgumentException("Serial Connection Location must be BACKEND_DIRECT or LOCAL_AGENT");
+    }
+
+    private long readRegister(Settings s, String type, int register, String encoding) throws IOException {
+        if (DELTA_SERIAL.equals(type)) {
+            if (LOCAL_AGENT.equals(serialLocation(s.serialConnectionLocation())))
+                return agents.read(s.factoryCode(), s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+                    s.serialParity(), s.serialStopBits(), s.unitId(), register, encoding);
+            return ModbusAsciiSerialReader.read(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+                s.serialParity(), s.serialStopBits(), s.unitId(), register, encoding);
+        }
+        return ModbusTcpReader.read(s.host().trim(), s.port(), s.unitId(), register, encoding);
+    }
+
+    private long readRegister(ScalePlcDevice d, int register, String encoding) throws IOException {
+        if (DELTA_SERIAL.equals(mode(d))) {
+            if (LOCAL_AGENT.equals(serialLocation(d.getSerialConnectionLocation())))
+                return agents.read(d.getFactoryCode(), d.getSerialComPort(), d.getSerialBaudRate(), d.getSerialDataBits(),
+                    d.getSerialParity(), d.getSerialStopBits(), d.getUnitId(), register, encoding);
+            return ModbusAsciiSerialReader.read(d.getSerialComPort(), d.getSerialBaudRate(),
+                d.getSerialDataBits(), d.getSerialParity(), d.getSerialStopBits(),
+                d.getUnitId(), register, encoding);
+        }
+        return ModbusTcpReader.read(d.getHost(), d.getPort(), d.getUnitId(), register, encoding);
     }
 
     /** Reserve the assigned station for exactly one RFID-finished carton.

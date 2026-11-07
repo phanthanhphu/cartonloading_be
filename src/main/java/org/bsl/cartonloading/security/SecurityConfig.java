@@ -50,6 +50,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/login", "/api/auth/account-change", "/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/buyers/login-options").permitAll()
+                        // Agent endpoints use an independently verified, Factory-scoped credential on EVERY request.
+                        .requestMatchers("/api/device-agents/v1/scale/**").permitAll()
                         .requestMatchers("/", "/index.html", "/favicon.ico", "/assets/**", "/css/**", "/js/**", "/images/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/health", "/info", "/ws/**", "/ws-native").permitAll()
                         // API docs and remaining Actuator endpoints require authentication by default.

@@ -198,6 +198,7 @@ public final class AppConstants {
     public static final class DeviceConnection {
         public static final String SIMULATOR = "SIMULATOR";
         public static final String MODBUS_TCP = "MODBUS_TCP";
+        public static final String DELTA_SERIAL = "DELTA_SERIAL";
         public static final String CONNECTED = "CONNECTED";
         public static final String DISCONNECTED = "DISCONNECTED";
         private DeviceConnection() { }

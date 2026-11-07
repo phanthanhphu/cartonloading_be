@@ -18,6 +18,14 @@ public class ScalePlcDevice {
     /** SIMULATOR is an in-app test source, MODBUS_TCP is a physical/external source. */
     private String connectionType = AppConstants.DeviceConnection.MODBUS_TCP;
     private String host;
+    /** USB/RS232 cable attached to the backend host, not the browser. */
+    /** BACKEND_DIRECT preserves existing Windows/dev profiles; LOCAL_AGENT routes through the Factory PC. */
+    private String serialConnectionLocation = "BACKEND_DIRECT";
+    private String serialComPort = "COM8";
+    private int serialBaudRate = 9600;
+    private int serialDataBits = 7;
+    private String serialParity = "EVEN";
+    private int serialStopBits = 1;
     private java.math.BigDecimal simulatedWeightKg;
     private java.time.Instant simulatedAt;
     private String simulatedEventId;
