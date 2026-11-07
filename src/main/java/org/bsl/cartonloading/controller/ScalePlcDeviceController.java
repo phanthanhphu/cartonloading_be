@@ -57,7 +57,7 @@ public class ScalePlcDeviceController {
 
     private static String safeSerialFailure(IOException e) {
         String error = String.valueOf(e.getMessage()).toLowerCase(java.util.Locale.ROOT);
-        if (error.contains("local plc agent is offline"))
+        if (error.contains("pc agent") || error.contains("local plc agent is offline"))
             return "Factory Local PLC Agent is offline. Start the Windows Agent, check its key, Factory code and HTTPS connection.";
         if (error.contains("plc agent timed out") || error.contains("plc agent request cancelled"))
             return "Factory Local PLC Agent did not return the read-only result in time. Check the Windows Agent console and COM port.";

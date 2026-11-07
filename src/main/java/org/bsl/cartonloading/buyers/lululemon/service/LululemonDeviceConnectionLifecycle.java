@@ -149,6 +149,7 @@ public class LululemonDeviceConnectionLifecycle {
                 (Objects.equals(ScalePlcDeviceService.serialLocation(d.getSerialConnectionLocation()),
                     ScalePlcDeviceService.serialLocation(request.serialConnectionLocation())) &&
                  Objects.equals(d.getSerialComPort(), request.serialComPort()) &&
+                 Objects.equals(d.getSerialAgentId(), request.serialAgentId()) &&
                  d.getSerialBaudRate() == request.serialBaudRate() &&
                  d.getSerialDataBits() == request.serialDataBits() &&
                  Objects.equals(d.getSerialParity(), request.serialParity()) &&
@@ -177,7 +178,7 @@ public class LululemonDeviceConnectionLifecycle {
                 d.getKgPerUnit(), d.isEnabled(), d.getAssignedUserIds(),
                 d.getConnectionType(), d.getStableRegisterAddress(),
                 d.getSerialComPort(), d.getSerialBaudRate(), d.getSerialDataBits(),
-                d.getSerialParity(), d.getSerialStopBits(), d.getSerialConnectionLocation());
+                d.getSerialParity(), d.getSerialStopBits(), d.getSerialConnectionLocation(), d.getSerialAgentId());
     }
 
     public static ConveyorPlcDeviceService.Settings conveyorSettings(ConveyorPlcDevice d) {

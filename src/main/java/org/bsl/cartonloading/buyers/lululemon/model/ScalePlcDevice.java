@@ -22,6 +22,8 @@ public class ScalePlcDevice {
     /** BACKEND_DIRECT preserves existing Windows/dev profiles; LOCAL_AGENT routes through the Factory PC. */
     private String serialConnectionLocation = "BACKEND_DIRECT";
     private String serialComPort = "COM8";
+    /** Optional v2 PC identity. Null retains the v1 per-Factory Agent transport. */
+    private String serialAgentId;
     private int serialBaudRate = 9600;
     private int serialDataBits = 7;
     private String serialParity = "EVEN";

@@ -7,6 +7,7 @@ import org.bsl.cartonloading.buyers.lululemon.repository.ScalePlcDeviceRepositor
 import org.bsl.cartonloading.buyers.lululemon.plc.ModbusTcpReader;
 import org.bsl.cartonloading.buyers.lululemon.plc.ModbusAsciiSerialReader;
 import org.bsl.cartonloading.buyers.lululemon.agent.ScaleAgentBroker;
+import org.bsl.cartonloading.buyers.lululemon.agent.FactoryPcAgentBroker;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.common.factory.FactoryCodes;
 import org.bsl.cartonloading.model.User;
@@ -47,6 +48,7 @@ public class ScalePlcDeviceService {
     private final MongoTemplate mongo;
     private final SelectedFactoryScope selectedFactory;
     private final ScaleAgentBroker agents;
+    private final FactoryPcAgentBroker pcAgents;
     public static final String SIMULATOR = AppConstants.DeviceConnection.SIMULATOR;
     public static final String MODBUS_TCP = AppConstants.DeviceConnection.MODBUS_TCP;
     public static final String DELTA_SERIAL = AppConstants.DeviceConnection.DELTA_SERIAL;
@@ -57,7 +59,7 @@ public class ScalePlcDeviceService {
                            int unitId, int registerAddress, String encoding, double kgPerUnit,
                            boolean enabled, List<String> assignedUserIds, String connectionType, Integer stableRegisterAddress,
                            String serialComPort, int serialBaudRate, int serialDataBits,
-                           String serialParity, int serialStopBits, String serialConnectionLocation) { }
+                           String serialParity, int serialStopBits, String serialConnectionLocation, String serialAgentId) { }
     public record AssignedStation(String stationCode, String stationName, String factoryCode, String connectionType,
                                   boolean stableConfigured) { }
     public record Reading(String stationCode, String factoryCode, String mode, long rawValue,
@@ -70,7 +72,7 @@ public class ScalePlcDeviceService {
     public ScalePlcDeviceService(ScalePlcDeviceRepository devices, UserRepository users,
             FactoryCatalogService factories, AuditLogService audit, AppSocketPublisher events, MongoTemplate mongo,
             SelectedFactoryScope selectedFactory,
-            SharedDeviceConfigurationStore sharedDevices, ScaleAgentBroker agents) {
+            SharedDeviceConfigurationStore sharedDevices, ScaleAgentBroker agents, FactoryPcAgentBroker pcAgents) {
         this.devices = devices;
         this.sharedDevices = sharedDevices;
         this.users = users;
@@ -80,6 +82,7 @@ public class ScalePlcDeviceService {
         this.mongo = mongo;
         this.selectedFactory = selectedFactory;
         this.agents = agents;
+        this.pcAgents = pcAgents;
     }
 
     /** Seed one simulator per Factory; operators access it through their User Management permission. */
@@ -177,6 +180,8 @@ public class ScalePlcDeviceService {
             throw new IllegalArgumentException("Invalid stable register address");
         if (DELTA_SERIAL.equals(mode)) {
             validateSerialLocation(s.serialConnectionLocation());
+            if (LOCAL_AGENT.equals(serialLocation(s.serialConnectionLocation())) && s.serialAgentId() != null && !s.serialAgentId().isBlank())
+                pcAgents.assertRegistered(factory, s.serialAgentId());
             ModbusAsciiSerialReader.validateSettings(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
                 s.serialParity(), s.serialStopBits(), s.unitId(), s.registerAddress(), s.encoding());
             if (s.stableRegisterAddress() != null)
@@ -222,6 +227,8 @@ public class ScalePlcDeviceService {
             throw new IllegalArgumentException("Invalid Modbus port or Unit ID");
         if (DELTA_SERIAL.equals(type)) {
             validateSerialLocation(s.serialConnectionLocation());
+            if (LOCAL_AGENT.equals(serialLocation(s.serialConnectionLocation())) && s.serialAgentId() != null && !s.serialAgentId().isBlank())
+                pcAgents.assertRegistered(factory, s.serialAgentId());
             ModbusAsciiSerialReader.validateSettings(s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
                 s.serialParity(), s.serialStopBits(), s.unitId(), s.registerAddress(), s.encoding());
             if (s.stableRegisterAddress() != null)
@@ -244,6 +251,7 @@ public class ScalePlcDeviceService {
                 || previous.getPort() != s.port())) ||
             (DELTA_SERIAL.equals(type) && (!java.util.Objects.equals(serialLocation(previous.getSerialConnectionLocation()), serialLocation(s.serialConnectionLocation()))
                 || !java.util.Objects.equals(previous.getSerialComPort(), s.serialComPort())
+                || !java.util.Objects.equals(previous.getSerialAgentId(), s.serialAgentId())
                 || previous.getSerialBaudRate() != s.serialBaudRate()
                 || previous.getSerialDataBits() != s.serialDataBits()
                 || !java.util.Objects.equals(previous.getSerialParity(), s.serialParity())
@@ -267,9 +275,12 @@ public class ScalePlcDeviceService {
         d.setStableRegisterAddress(s.stableRegisterAddress());
         if (DELTA_SERIAL.equals(type)) {
             d.setSerialConnectionLocation(serialLocation(s.serialConnectionLocation()));
+            d.setSerialAgentId(LOCAL_AGENT.equals(serialLocation(s.serialConnectionLocation())) ? s.serialAgentId() : null);
             d.setSerialComPort(s.serialComPort().startsWith("/dev/") ? s.serialComPort() : s.serialComPort().toUpperCase(java.util.Locale.ROOT));
             d.setSerialBaudRate(s.serialBaudRate()); d.setSerialDataBits(s.serialDataBits());
             d.setSerialParity(s.serialParity()); d.setSerialStopBits(s.serialStopBits());
+        } else {
+            d.setSerialAgentId(null);
         }
         d.setAssignedUserIds(List.of());
         if (changedPhysicalSource) {
@@ -419,6 +430,9 @@ public class ScalePlcDeviceService {
 
     private long readRegister(Settings s, String type, int register, String encoding) throws IOException {
         if (DELTA_SERIAL.equals(type)) {
+            if (LOCAL_AGENT.equals(serialLocation(s.serialConnectionLocation())) && s.serialAgentId() != null && !s.serialAgentId().isBlank())
+                return pcAgents.read(s.factoryCode(), s.serialAgentId(), s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
+                    s.serialParity(), s.serialStopBits(), s.unitId(), register, encoding);
             if (LOCAL_AGENT.equals(serialLocation(s.serialConnectionLocation())))
                 return agents.read(s.factoryCode(), s.serialComPort(), s.serialBaudRate(), s.serialDataBits(),
                     s.serialParity(), s.serialStopBits(), s.unitId(), register, encoding);
@@ -430,6 +444,9 @@ public class ScalePlcDeviceService {
 
     private long readRegister(ScalePlcDevice d, int register, String encoding) throws IOException {
         if (DELTA_SERIAL.equals(mode(d))) {
+            if (LOCAL_AGENT.equals(serialLocation(d.getSerialConnectionLocation())) && d.getSerialAgentId() != null && !d.getSerialAgentId().isBlank())
+                return pcAgents.read(d.getFactoryCode(), d.getSerialAgentId(), d.getSerialComPort(), d.getSerialBaudRate(), d.getSerialDataBits(),
+                    d.getSerialParity(), d.getSerialStopBits(), d.getUnitId(), register, encoding);
             if (LOCAL_AGENT.equals(serialLocation(d.getSerialConnectionLocation())))
                 return agents.read(d.getFactoryCode(), d.getSerialComPort(), d.getSerialBaudRate(), d.getSerialDataBits(),
                     d.getSerialParity(), d.getSerialStopBits(), d.getUnitId(), register, encoding);
