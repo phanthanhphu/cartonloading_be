@@ -2,6 +2,7 @@ package org.bsl.cartonloading.controller;
 
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.lululemon.agent.ScaleAgentBroker;
+import org.bsl.cartonloading.buyers.lululemon.agent.FactoryPcAgentBroker;
 import org.bsl.cartonloading.buyers.lululemon.repository.ScalePlcDeviceRepository;
 import org.bsl.cartonloading.buyers.lululemon.service.ScalePlcDeviceService;
 import java.util.Map;
@@ -21,9 +22,21 @@ public class LululemonDeviceStatusController {
     private final LululemonDeviceStatusNotifier notifier;
     private final ScalePlcDeviceRepository scales;
     private final ScaleAgentBroker agents;
+    private final FactoryPcAgentBroker pcAgents;
     public LululemonDeviceStatusController(LululemonDeviceStatusNotifier notifier,
-            ScalePlcDeviceRepository scales, ScaleAgentBroker agents) {
-        this.notifier = notifier; this.scales = scales; this.agents = agents;
+            ScalePlcDeviceRepository scales, ScaleAgentBroker agents, FactoryPcAgentBroker pcAgents) {
+        this.notifier = notifier; this.scales = scales; this.agents = agents; this.pcAgents = pcAgents;
+    }
+
+    /** Match the transport selected by the SAVED Scale profile; PC Agent v2 is not the v1 broker. */
+    private boolean localAgentOnline(org.bsl.cartonloading.buyers.lululemon.model.ScalePlcDevice scale) {
+        String id = scale.getSerialAgentId();
+        if (id != null && !id.isBlank()) {
+            // A configured v2 PC must be online by its own ID; never fall back to v1 Agent status.
+            return pcAgents.list(scale.getFactoryCode()).stream()
+                .anyMatch(pc -> id.equals(pc.agentId()) && pc.online());
+        }
+        return agents.status(scale.getFactoryCode()).online(); // Legacy v1 configuration.
     }
 
     @GetMapping
@@ -37,7 +50,7 @@ public class LululemonDeviceStatusController {
                 && ScalePlcDeviceService.DELTA_SERIAL.equalsIgnoreCase(d.getConnectionType())
                 && ScalePlcDeviceService.LOCAL_AGENT.equals(ScalePlcDeviceService.serialLocation(d.getSerialConnectionLocation())))
             .collect(Collectors.toMap(d -> d.getFactoryCode().toUpperCase(java.util.Locale.ROOT),
-                d -> agents.status(d.getFactoryCode()).online(), (a, b) -> a));
+                this::localAgentOnline, (a, b) -> a));
         return notifier.snapshot().stream().map(row -> {
             if (!"PLC".equals(row.kind()) || !Boolean.FALSE.equals(online.get(row.factoryCode())) ||
                 !AppConstants.DeviceConnection.CONNECTED.equals(row.state())) return row;
