@@ -24,6 +24,7 @@ import org.bsl.cartonloading.buyers.lululemon.model.ScanEvent;
 import org.bsl.cartonloading.buyers.lululemon.model.ShippingSchedule;
 import org.bsl.cartonloading.buyers.lululemon.model.WeighingResult;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession;
+import org.bsl.cartonloading.buyers.lululemon.model.RfidPdaCapture;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonItemRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.CartonRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
@@ -1804,9 +1805,101 @@ public class WorkflowService {
     }
 
     /**
-     * Operator correction immediately after Assign / Identify (BEFORE starting RFID).
-     * Undo SSCC and carton-label SKU together; keep PO master SKU, logical Item IDs
-     * and all audit history. Legacy Admin SSCC-unassign remains a separate action.
+     * The FIRST carton label may have established an otherwise-empty PO SKU.
+     * On undoing that label, release the provisional PO SKU ONLY if it came from
+     * the very same identification and no other carton has used this PO yet.
+     * Imported/master PO SKUs and SKUs used by other cartons must never be reset.
+     */
+    static boolean mayReleaseProvisionalPoSku(PurchaseOrder po, Carton removed,
+                                               List<Carton> poCartons) {
+        if (po == null || removed == null || poCartons == null
+                || po.getSkuAssignedAt() == null || removed.getLabelConfirmedAt() == null
+                || po.getSkuAssignedBy() == null || removed.getLabelConfirmedBy() == null
+                || !po.getSkuAssignedBy().equals(removed.getLabelConfirmedBy())) return false;
+        String poSku = TrueVueDecoder.skuKey(po.getSku());
+        String cartonSku = TrueVueDecoder.skuKey(removed.getLabelConfirmedSku());
+        if (poSku == null || !poSku.equals(cartonSku)) return false;
+        // Both timestamps are recorded by confirmCartonLabel when the SKU is
+        // claimed from the same carton; imported PO SKU has no claim timestamp.
+        long claimedToConfirmed = java.time.Duration.between(
+                po.getSkuAssignedAt(), removed.getLabelConfirmedAt()).toSeconds();
+        if (claimedToConfirmed < 0 || claimedToConfirmed > 300) return false;
+        return poCartons.stream().filter(other -> other != null
+                        && !Objects.equals(removed.getId(), other.getId()))
+                .noneMatch(other -> clean(other.getSscc()) != null
+                        || clean(other.getLabelConfirmedSku()) != null
+                        || other.getLabelConfirmedAt() != null
+                        || other.getQtyConfirmedAt() != null
+                        || safeInt(other.getScannedQty()) > 0
+                        || clean(other.getRfidSessionId()) != null
+                        || clean(other.getRfidStatus()) != null
+                        || clean(other.getWeightStatus()) != null
+                        || other.getWeighedAt() != null
+                        || other.getFinishedAt() != null
+                        || !AppConstants.CartonStatus.READY_TO_PACK.equals(other.getStatus()));
+    }
+
+    /**
+     * Backward-compatible repair for a previously unassigned FIRST carton: old
+     * builds cleared the Carton SKU but left the provisional PO SKU behind.
+     * Called only when a NEW SSCC has a mismatching scan SKU and an explicit
+     * Carton ID was selected. This MUST NOT reset an imported/master SKU or a
+     * SKU that has any surviving Carton/Item/RFID/Weight activity.
+     */
+    public synchronized PurchaseOrder releaseOrphanedProvisionalPoSku(String buyerCode,
+                                                                       String orderId, String poId) {
+        requireOrder(buyerCode, orderId);
+        PurchaseOrder po = requirePo(orderId, poId);
+        assertFactoryAccessIfPresent(po.getFactoryCode());
+        if (clean(po.getSku()) == null || po.getSkuAssignedAt() == null
+                || clean(po.getSkuAssignedBy()) == null) return po;
+        List<Carton> allCartons = cartonRepository.findByPoIdOrderByCartonNoAsc(poId);
+        if (allCartons.isEmpty() || allCartons.stream().anyMatch(c ->
+                clean(c.getSscc()) != null || clean(c.getLabelConfirmedSku()) != null
+                || c.getLabelConfirmedAt() != null || c.getQtyConfirmedAt() != null
+                || safeInt(c.getScannedQty()) > 0 || clean(c.getRfidSessionId()) != null
+                || clean(c.getRfidStatus()) != null || clean(c.getWeightStatus()) != null
+                || c.getWeighedAt() != null || c.getFinishedAt() != null
+                || !AppConstants.CartonStatus.READY_TO_PACK.equals(c.getStatus()))) return po;
+        // Legacy data may retain an Item scan even if the Carton summary was reset.
+        if (itemRepository.findByPoIdOrderByCartonNoAscItemNoAsc(poId).stream().anyMatch(item ->
+                AppConstants.ItemStatus.PASS.equals(item.getStatus())
+                || clean(item.getScannedSku()) != null || clean(item.getRfidEpc()) != null
+                || item.getRfidVerifiedAt() != null)) return po;
+        if (mongoTemplate.exists(Query.query(Criteria.where("poId").is(poId)), RfidScanSession.class)
+                || mongoTemplate.exists(Query.query(Criteria.where("poId").is(poId)), WeighingResult.class)) return po;
+        Query release = Query.query(Criteria.where("_id").is(poId)
+                .and("sku").is(po.getSku())
+                .and("skuAssignedAt").is(po.getSkuAssignedAt())
+                .and("skuAssignedBy").is(po.getSkuAssignedBy()));
+        Update clear = new Update().unset("sku").unset("skuAssignedAt").unset("skuAssignedBy")
+                .set("updatedAt", LocalDateTime.now()).set("updatedBy", RequestActor.current());
+        PurchaseOrder updated = mongoTemplate.findAndModify(release, clear,
+                FindAndModifyOptions.options().returnNew(true), PurchaseOrder.class);
+        if (updated == null) return requirePo(orderId, poId);
+        audit(AppConstants.AuditAction.RESET_PO_SKU, poId,
+                "Released orphaned provisional PO SKU " + po.getSku()
+                        + " after a Carton SSCC/SKU Re-assign. No active carton, Item, RFID or Weight data was found.");
+        socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.PO_SKU_RESET, poId);
+        return updated;
+    }
+
+    /** A carton is final only when RFID AND Weight have both completed. */
+    static boolean isCompletedForIdentityReassign(Carton carton) {
+        if (carton == null) return false;
+        boolean rfidDone = AppConstants.RfidCheck.PASS.equals(carton.getRfidStatus())
+                || AppConstants.RfidCheck.FAILED.equals(carton.getRfidStatus());
+        boolean weightDone = AppConstants.WeightStatus.PASS.equals(carton.getWeightStatus())
+                || AppConstants.WeightStatus.FAILED.equals(carton.getWeightStatus());
+        return rfidDone && weightDone;
+    }
+
+    /**
+     * Re-assign an unfinished LULULEMON carton, including one which has already
+     * been activated/started. The final RFID + Weight result is immutable here.
+     * Prior RFID attempts are archived with their evidence; never delete them.
+     * Existing live PDA reservations and recorded weight events must be dealt
+     * with separately before identity can be changed.
      */
     public synchronized Carton unassignNewCartonIdentity(String buyerCode, String orderId,
                                                           String cartonId, ExceptionRequest request) {
@@ -1816,53 +1909,77 @@ public class WorkflowService {
         String reason = requireReason(request);
         String previousSscc = clean(carton.getSscc());
         String previousSku = clean(carton.getLabelConfirmedSku());
-        if (previousSscc == null || carton.getLabelConfirmedAt() == null) {
-            throw new IllegalArgumentException("Carton SSCC + SKU have not been identified together.");
+        if (previousSscc == null && previousSku == null) {
+            throw new IllegalArgumentException("Carton has no SSCC or SKU assignment to clear.");
         }
-        // An operator can correct their own recent identification. Admin may
-        // correct a colleague's identification, still subject to the history guards.
         if (!factoryAccess.currentUser().isAdminRole()
                 && !Objects.equals(clean(carton.getSsccAssignedBy()), clean(RequestActor.current()))) {
             throw new org.springframework.security.access.AccessDeniedException(
                     "Only the user who assigned this SSCC or Admin can unassign it.");
         }
-        // Do not allow this operator-level correction to destroy a real packed,
-        // inspected or weighed carton. The RFID session table is authoritative,
-        // including SCANNING/FAILED attempts and historical retries.
-        if (carton.getFinishedAt() != null || safeInt(carton.getScannedQty()) > 0
-                || clean(carton.getRfidSessionId()) != null || clean(carton.getRfidStatus()) != null
-                || clean(carton.getWeightStatus()) != null || carton.getWeighedAt() != null
-                || AppConstants.CartonStatus.FINISHED.equals(carton.getStatus())
-                || AppConstants.CartonStatus.READY_TO_SHIP.equals(carton.getStatus())
-                || AppConstants.CartonStatus.LABEL_CONFIRMED.equals(carton.getStatus())) {
-            throw new IllegalArgumentException("Carton already has packing/RFID/Weight activity. Use Admin review; unassign is only allowed before RFID starts.");
+        if (isCompletedForIdentityReassign(carton)) {
+            throw new IllegalArgumentException("Carton already completed RFID and Weight; Re-assign is locked.");
         }
-        Query rfidHistory = Query.query(Criteria.where("cartonId").is(cartonId)
-                .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
-        if (mongoTemplate.exists(rfidHistory,
-                RfidScanSession.class)) {
-            throw new IllegalArgumentException("An RFID session already exists for this carton. Unassign is blocked to preserve its inspection history.");
-        }
+        // A saved weighing result (even if later reopened) is authoritative
+        // history and cannot be reassigned through the simple operator action.
         Query weightHistory = Query.query(Criteria.where("cartonId").is(cartonId)
                 .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
-        if (mongoTemplate.exists(weightHistory, WeighingResult.class)) {
-            throw new IllegalArgumentException("Weight history exists for this carton. Unassign is blocked.");
+        if (clean(carton.getWeightStatus()) != null || carton.getWeighedAt() != null
+                || mongoTemplate.exists(weightHistory, WeighingResult.class)) {
+            throw new IllegalArgumentException("Recorded weight exists. Use the controlled reopen/review workflow.");
         }
+        // Do not change identity while a physical PDA owns an active capture.
+        // Its reservation must first be released using the existing PDA flow.
+        Query activePda = Query.query(Criteria.where("sessionId").is(carton.getRfidSessionId()));
+        if (clean(carton.getRfidSessionId()) != null
+                && mongoTemplate.exists(activePda, RfidPdaCapture.class)) {
+            throw new IllegalArgumentException("RFID PDA capture is reserved. Stop and finish/release the PDA capture before Re-assign.");
+        }
+
         List<CartonItem> itemSlots = itemRepository.findByCartonIdOrderByItemNoAsc(cartonId);
-        for (CartonItem item : itemSlots) {
-            if (AppConstants.ItemStatus.PASS.equals(item.getStatus())
-                    || clean(item.getScannedSku()) != null || clean(item.getRfidEpc()) != null
-                    || item.getRfidVerifiedAt() != null
-                    || (clean(item.getRfidStatus()) != null
-                        && !AppConstants.RfidStatus.WAITING_RFID.equals(item.getRfidStatus()))) {
-                throw new IllegalArgumentException("An Item already has scan/RFID results. Use Admin review instead.");
+        PurchaseOrder po = requirePo(orderId, carton.getPoId());
+        boolean poSkuReleaseCandidate = mayReleaseProvisionalPoSku(
+                po, carton, cartonRepository.findByPoIdOrderByCartonNoAsc(po.getId()));
+        boolean otherHistory = poSkuReleaseCandidate && (
+                mongoTemplate.exists(Query.query(Criteria.where("poId").is(po.getId())
+                        .and("cartonId").ne(cartonId)), RfidScanSession.class)
+                || mongoTemplate.exists(Query.query(Criteria.where("poId").is(po.getId())
+                        .and("cartonId").ne(cartonId)), WeighingResult.class));
+
+        // Preserve RFID scan evidence: close the current SCANNING/PASS/FAILED
+        // attempt as REASSIGNED. Old EPCs never count as a live inspection.
+        // Compare-and-set rejects a concurrent change from another workstation.
+        Query latestScanQuery = Query.query(Criteria.where("cartonId").is(cartonId)
+                .and("buyerCode").is(AppConstants.Buyer.LULULEMON))
+                .with(Sort.by(Sort.Direction.DESC, "startedAt")).limit(1);
+        RfidScanSession latest = mongoTemplate.findOne(latestScanQuery, RfidScanSession.class);
+        if (latest != null && !"REASSIGNED".equals(latest.getStatus())) {
+            Query closeCurrent = Query.query(Criteria.where("_id").is(latest.getId())
+                    .and("status").is(latest.getStatus()));
+            Update archive = new Update()
+                    .set("status", "REASSIGNED")
+                    .set("reason", "Previous RFID status: " + latest.getStatus()
+                            + ". Previous reason: " + Objects.toString(latest.getReason(), "none")
+                            + ". Cancelled by SSCC/SKU Re-assign. " + reason)
+                    .set("finishedBy", RequestActor.current())
+                    .set("finishedAt", LocalDateTime.now());
+            if (mongoTemplate.findAndModify(closeCurrent, archive,
+                    FindAndModifyOptions.options().returnNew(true), RfidScanSession.class) == null) {
+                throw new IllegalArgumentException("RFID session changed. Refresh the Carton and retry.");
             }
         }
+
         LocalDateTime now = LocalDateTime.now();
         for (CartonItem item : itemSlots) {
             item.setExpectedSku(null);
+            item.setScannedSku(null);
+            item.setScannedBy(null);
+            item.setScannedAt(null);
             item.setStatus(AppConstants.ItemStatus.PENDING);
             item.setRfidStatus(null);
+            item.setRfidEpc(null);
+            item.setRfidSerialNumber(null);
+            item.setRfidVerifiedAt(null);
             item.setUpdatedAt(now);
         }
         if (!itemSlots.isEmpty()) itemRepository.saveAll(itemSlots);
@@ -1874,17 +1991,65 @@ public class WorkflowService {
         carton.setLabelConfirmedBy(null);
         carton.setQtyConfirmedAt(null);
         carton.setQtyConfirmedBy(null);
+        carton.setScannedQty(0);
+        carton.setStartedAt(null);
+        carton.setStartedBy(null);
+        carton.setFinishedAt(null);
+        carton.setFinishedBy(null);
+        carton.setPackedBy(null);
+        carton.setRfidStatus(null);
+        carton.setRfidSessionId(null);
+        carton.setRfidVerifiedQty(null);
+        carton.setRfidVerifiedAt(null);
         carton.setStatus(AppConstants.CartonStatus.READY_TO_PACK);
         carton.setUpdatedAt(now);
         carton.setUpdatedBy(RequestActor.current());
         carton = cartonRepository.save(carton);
-        // The master PO SKU from ALL_BP remains unchanged. No Items are deleted.
+        boolean poSkuReleased = false;
+        if (poSkuReleaseCandidate && !otherHistory) {
+            Query clearSku = Query.query(Criteria.where("_id").is(po.getId())
+                    .and("sku").is(po.getSku())
+                    .and("skuAssignedAt").is(po.getSkuAssignedAt())
+                    .and("skuAssignedBy").is(po.getSkuAssignedBy()));
+            Update clearSkuUpdate = new Update()
+                    .unset("sku").unset("skuAssignedAt").unset("skuAssignedBy")
+                    .set("updatedBy", RequestActor.current()).set("updatedAt", now);
+            poSkuReleased = mongoTemplate.findAndModify(clearSku, clearSkuUpdate,
+                    FindAndModifyOptions.options().returnNew(true), PurchaseOrder.class) != null;
+        }
+        refreshPoStatus(requirePo(orderId, po.getId()));
+        // RFID review is independent of weighing. It must not retain PASS/ISSUES
+        // after its Carton's active result has been cleared.
+        String review = RfidReviewStatus.fromCartons(cartonRepository.findByPoIdOrderByCartonNoAsc(po.getId()));
+        PurchaseOrder freshPo = requirePo(orderId, po.getId());
+        if (!Objects.equals(freshPo.getRfidReviewStatus(), review)) {
+            freshPo.setRfidReviewStatus(review);
+            freshPo.setUpdatedAt(now);
+            poRepository.save(freshPo);
+        }
+        for (ShippingSchedule schedule : shippingScheduleRepository
+                .findByOrderIdAndBuyerCodeOrderByExFtyDateAscCreatedAtDesc(orderId, AppConstants.Buyer.LULULEMON)) {
+            if (schedule.getPoIds() == null || !schedule.getPoIds().contains(po.getId())) continue;
+            List<Carton> scheduledCartons = new ArrayList<>();
+            for (String scheduledPo : schedule.getPoIds()) {
+                scheduledCartons.addAll(cartonRepository.findByPoIdOrderByCartonNoAsc(scheduledPo));
+            }
+            String scheduleReview = RfidReviewStatus.fromCartons(scheduledCartons);
+            if (!Objects.equals(schedule.getRfidReviewStatus(), scheduleReview)) {
+                schedule.setRfidReviewStatus(scheduleReview);
+                schedule.setUpdatedAt(now);
+                shippingScheduleRepository.save(schedule);
+            }
+        }
         audit(AppConstants.AuditAction.UNASSIGN_CARTON_IDENTITY, cartonId,
-                "Operator unassigned newly identified carton " + carton.getCartonNo()
+                "Operator reassigned unfinished carton " + carton.getCartonNo()
                     + " (PO " + carton.getPoNumber() + ", Factory " + carton.getFactoryCode()
                     + "): SSCC " + previousSscc + ", SKU " + previousSku
-                    + ". Reason: " + reason + ". Preserved " + itemSlots.size() + " Item IDs and PO SKU.");
+                    + ". Reason: " + reason + ". Preserved " + itemSlots.size()
+                    + " Item IDs and RFID audit evidence; cleared unfinished activity. "
+                    + (poSkuReleased ? "Provisional PO SKU released." : "Existing PO SKU preserved."));
         socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.SSCC_UNASSIGNED, cartonId);
+        if (poSkuReleased) socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.PO_SKU_RESET, po.getId());
         return carton;
     }
 

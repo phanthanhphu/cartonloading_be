@@ -137,9 +137,6 @@ public class CartonProcessingService {
                 throw new AccessDeniedException("PO does not belong to the selected Factory.");
             String skuToAssign = TrueVueDecoder.skuKey(input.sku());
             if (skuToAssign == null) throw new IllegalArgumentException("Scan the carton SKU before assigning SSCC.");
-            String expected = TrueVueDecoder.skuKey(selectedPo.getSku());
-            if (expected != null && !expected.equals(skuToAssign))
-                throw new IllegalArgumentException("SKU does not match selected PO; SSCC not assigned.");
             // The operator selects the physical Carton row first. Never allocate by FIFO:
             // the PO may contain cartons with different Planned Qty (e.g. 14 + 1 pcs).
             // A physical Carton row ID is required before assigning an unrecognized SSCC.
@@ -153,6 +150,15 @@ public class CartonProcessingService {
                 throw new IllegalArgumentException("Selected Carton already has a different SSCC. Rescan the SSCC on its label.");
             if (available.getWeightStatus() != null || available.getRfidSessionId() != null)
                 throw new IllegalArgumentException("Selected Carton has RFID/Weight history; supervisor review required.");
+            String expected = TrueVueDecoder.skuKey(selectedPo.getSku());
+            if (expected != null && !expected.equals(skuToAssign)) {
+                // Handle PO SKUs stranded by older Re-assign builds. A still-used
+                // or imported/master PO SKU remains protected by WorkflowService.
+                selectedPo = workflow.releaseOrphanedProvisionalPoSku(buyer, input.orderId(), selectedPo.getId());
+                expected = TrueVueDecoder.skuKey(selectedPo.getSku());
+                if (expected != null && !expected.equals(skuToAssign))
+                    throw new IllegalArgumentException("Scanned SKU does not match the selected PO SKU. Re-assign removed the Carton SKU; the PO still has an imported or used SKU. Check the PO/SKU before assigning this SSCC.");
+            }
             carton = workflow.assignSscc(buyer, input.orderId(), available.getId(), new AssignSsccRequest(scannedSscc));
         }
         if (!AppConstants.Buyer.LULULEMON.equals(carton.getBuyerCode()))
