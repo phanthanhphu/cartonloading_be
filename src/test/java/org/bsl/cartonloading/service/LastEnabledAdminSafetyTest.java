@@ -6,6 +6,7 @@ import org.bsl.cartonloading.model.User;
 import org.bsl.cartonloading.repository.BuyerRepository;
 import org.bsl.cartonloading.repository.DepartmentRepository;
 import org.bsl.cartonloading.repository.UserRepository;
+import org.bsl.cartonloading.repository.UserAvatarRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -22,7 +23,7 @@ class LastEnabledAdminSafetyTest {
         AuditLogService audit = mock(AuditLogService.class);
         UserAdminService service = new UserAdminService(users, mock(DepartmentRepository.class),
                 mock(BuyerRepository.class), mock(PasswordEncoder.class), mock(UserService.class),
-                audit, mock(FactoryCatalogService.class), mock(AppSocketPublisher.class));
+                audit, mock(FactoryCatalogService.class), mock(AppSocketPublisher.class), mock(UserAvatarRepository.class));
         User admin = new User();
         admin.setId("admin-1");
         admin.setRole("ADMIN");

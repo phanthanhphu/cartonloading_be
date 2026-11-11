@@ -5,6 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.bsl.cartonloading.model.AuditLog;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
+import org.bsl.cartonloading.buyers.es.model.Shipment;
+import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
+import org.bsl.cartonloading.buyers.lululemon.model.Carton;
+import org.bsl.cartonloading.buyers.lululemon.model.ShippingSchedule;
 import org.bsl.cartonloading.repository.AuditLogRepository;
 import org.bsl.cartonloading.repository.UserRepository;
 import org.bsl.cartonloading.security.WorkspaceSession;
@@ -37,11 +44,66 @@ public class AuditLogService {
         this.repository = repository; this.users = users; this.mongo = mongo; this.mapper = mapper;
     }
 
-    /** Legacy writer, intentionally ADMIN-only until the action supplies a verified Factory. */
+    /**
+     * Compatibility writer: derive Factory from the affected persisted record when possible.
+     * NEVER trust a client-selected Factory or infer it from free-form description text.
+     * Unresolvable/global events remain admin-visible only, not silently assigned elsewhere.
+     */
     public AuditLog log(String username, String action, String resourceType, String resourceId,
                         String description, String ipAddress, String userAgent) {
         return logChange(username, action, resourceType, resourceId, description, null, null,
                 null, null, ipAddress, userAgent);
+    }
+
+    /** Deliberately scoped writer for operations such as delete, where the source has been removed. */
+    public AuditLog logForFactory(String username, String action, String resourceType, String resourceId,
+                                  String description, String buyerCode, String factoryCode) {
+        return logChange(username, action, resourceType, resourceId, description,
+                buyerCode, factoryCode, null, null, null, null);
+    }
+
+    private record TrustedScope(String buyer, String factory) { }
+
+    /** Look up only authoritative domain records. No Factory guess based on current browser header. */
+    private TrustedScope lookupScope(String resourceType, String resourceId) {
+        if (resourceType == null || resourceId == null || resourceId.isBlank()) return null;
+        switch (resourceType) {
+            case AppConstants.AuditResource.CARTON_LOADING, AppConstants.AuditResource.WEIGHING,
+                 AppConstants.AuditResource.PO_HANDOFF, AppConstants.AuditResource.PO_SHIPPING_PLAN,
+                 "LULULEMON_ORDER" -> {
+                Carton carton = mongo.findById(resourceId, Carton.class);
+                if (carton != null) return new TrustedScope(carton.getBuyerCode(), carton.getFactoryCode());
+                PurchaseOrder po = mongo.findById(resourceId, PurchaseOrder.class);
+                if (po != null) return new TrustedScope(po.getBuyerCode(), po.getFactoryCode());
+                PackingOrder order = mongo.findById(resourceId, PackingOrder.class);
+                if (order != null && AppConstants.Buyer.LULULEMON.equals(BuyerAccess.normalize(order.getBuyerCode())))
+                    return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
+            }
+            case AppConstants.AuditResource.SHIPPING_SCHEDULE -> {
+                ShippingSchedule schedule = mongo.findById(resourceId, ShippingSchedule.class);
+                if (schedule != null) return new TrustedScope(schedule.getBuyerCode(), schedule.getFactoryCode());
+            }
+            case AppConstants.AuditResource.CARTON, AppConstants.AuditResource.SHIPMENT_CARTON -> {
+                CartonScanTransaction carton = mongo.findById(resourceId, CartonScanTransaction.class);
+                if (carton != null && carton.getOrderId() != null) {
+                    PackingOrder order = mongo.findById(carton.getOrderId(), PackingOrder.class);
+                    if (order != null && BuyerAccess.normalize(carton.getBuyerCode()).equals(BuyerAccess.normalize(order.getBuyerCode())))
+                        return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
+                }
+                Shipment shipment = mongo.findById(resourceId, Shipment.class);
+                if (shipment != null && shipment.getOrderId() != null) {
+                    PackingOrder order = mongo.findById(shipment.getOrderId(), PackingOrder.class);
+                    if (order != null && BuyerAccess.normalize(shipment.getBuyerCode()).equals(BuyerAccess.normalize(order.getBuyerCode())))
+                        return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
+                }
+            }
+            case AppConstants.AuditResource.ORDER -> {
+                PackingOrder order = mongo.findById(resourceId, PackingOrder.class);
+                if (order != null) return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
+            }
+            default -> { /* Global/system events stay unassigned unless caller specifies trusted scope. */ }
+        }
+        return null;
     }
 
     /** Explicit Buyer + Factory are sourced from the affected entity, NOT a client-supplied log payload. */
@@ -60,6 +122,18 @@ public class AuditLogService {
         // Ensure Factory scope is unambiguous, and only issue it when Buyer context is explicit.
         String b = BuyerAccess.normalize(buyer);
         String f = User.normalizeFactoryCode(factory);
+        if (b.isEmpty() || f.isEmpty()) {
+            TrustedScope persisted = lookupScope(resourceType, resourceId);
+            if (persisted != null) {
+                String savedBuyer = BuyerAccess.normalize(persisted.buyer());
+                String savedFactory = User.normalizeFactoryCode(persisted.factory());
+                // A conflict must never expose a record across buyers or factories.
+                if (!savedBuyer.isEmpty() && (b.isEmpty() || b.equals(savedBuyer))) {
+                    if (b.isEmpty()) b = savedBuyer;
+                    if (f.isEmpty()) f = savedFactory;
+                }
+            }
+        }
         if (!b.isEmpty()) row.setBuyerCode(b);
         if (!b.isEmpty() && !f.isEmpty() && f.matches("F[1-9][0-9]*")) row.setFactoryCode(f);
         Map<String, Object> oldValues = snapshot(before);
@@ -148,12 +222,14 @@ public class AuditLogService {
                                  LocalDateTime from, LocalDateTime to, int page, int size) {
         Viewer caller = viewer();
         String buyerFilter = clean(buyer), factoryFilter = clean(factory);
+        // The authenticated JWT workspace defines the Buyer for EVERY role, including ADMIN.
+        // Caller-supplied buyerCode can only confirm it, never switch to another Buyer.
+        String activeBuyer = BuyerAccess.normalize(caller.workspace().buyer());
+        if (activeBuyer.isEmpty() || (buyerFilter != null && !activeBuyer.equals(BuyerAccess.normalize(buyerFilter))))
+            throw new AccessDeniedException("Buyer access denied");
         List<Criteria> criteria = new ArrayList<>();
+        criteria.add(Criteria.where("buyerCode").is(activeBuyer));
         if (!caller.user().isAdminRole()) {
-            String activeBuyer = caller.workspace().buyer();
-            if (buyerFilter != null && !activeBuyer.equals(BuyerAccess.normalize(buyerFilter)))
-                throw new AccessDeniedException("Buyer access denied");
-            criteria.add(Criteria.where("buyerCode").is(activeBuyer));
             // A non-admin may never query "All Factories" or legacy records without a Factory.
             List<String> allowedFactories = caller.user().getFactoryPermissions();
             String scopedFactory;
@@ -170,8 +246,8 @@ public class AuditLogService {
             }
             criteria.add(Criteria.where("factoryCode").is(scopedFactory));
         } else {
-            // Admin can query every Factory AND legacy audit rows without Factory information.
-            if (buyerFilter != null) criteria.add(Criteria.where("buyerCode").is(BuyerAccess.normalize(buyerFilter)));
+            // Admin can see every Factory within the authenticated Buyer, never a different Buyer
+            // or a global/legacy record that has no verifiable Buyer assignment.
             if (factoryFilter != null) criteria.add(Criteria.where("factoryCode").is(User.normalizeFactoryCode(factoryFilter)));
         }
         addLike(criteria, "username", username);
@@ -198,6 +274,12 @@ public class AuditLogService {
         Viewer caller = viewer();
         AuditLog log = repository.findById(id).orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                 org.springframework.http.HttpStatus.NOT_FOUND, "Audit log not found"));
+        // Detail lookup must enforce the same buyer isolation as search, even for administrators.
+        // Do not expose whether a log from another Buyer exists.
+        String activeBuyer = BuyerAccess.normalize(caller.workspace().buyer());
+        if (activeBuyer.isEmpty() || !activeBuyer.equals(BuyerAccess.normalize(log.getBuyerCode())))
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "Audit log not found");
         if (!caller.user().isAdminRole()) {
             List<String> allowedFactories = caller.user().getFactoryPermissions();
             String scopedFactory;
@@ -213,8 +295,7 @@ public class AuditLogService {
                         "Select an assigned Factory to read an audit record");
             }
             // The detail endpoint cannot bypass the same current-Factory constraint as the list.
-            if (!caller.workspace().buyer().equals(log.getBuyerCode()) ||
-                    !scopedFactory.equals(log.getFactoryCode()))
+            if (!scopedFactory.equals(log.getFactoryCode()))
                 throw new AccessDeniedException("Factory audit access denied");
         }
         return log;

@@ -323,10 +323,10 @@ public class PoShippingPlanService {
                 Criteria.where("factoryCode").is(factory), Criteria.where("plannedShippingDate").is(null)));
         mongo.updateMulti(first, new Update().set("plannedShippingDate", request.shippingDate())
                 .set("shippingScheduledBy", actor).set("shippingScheduledAt", now), PurchaseOrder.class);
-        audit.log(actor, AppConstants.AuditAction.PO_SHIPPING_PLAN_CREATE,
+        audit.logForFactory(actor, AppConstants.AuditAction.PO_SHIPPING_PLAN_CREATE,
                 AppConstants.AuditResource.PO_SHIPPING_PLAN, orderId,
                 "Added " + changed + " PO(s) to Shipping Date " + request.shippingDate() + " for Factory " + factory,
-                null, null);
+                AppConstants.Buyer.LULULEMON, factory);
         return Map.of("shippingDate", request.shippingDate().toString(), "factoryCode", factory,
                 "scheduledCount", changed);
     }
@@ -356,10 +356,10 @@ public class PoShippingPlanService {
                 Criteria.where("updatedAt").is(po.getUpdatedAt()))), update, PurchaseOrder.class).getMatchedCount();
         if (matched != 1) throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "PO changed while editing this Shipping Date. Refresh and try again.");
-        audit.log(actor, AppConstants.AuditAction.PO_SHIPPING_PLAN_REMOVE,
+        audit.logForFactory(actor, AppConstants.AuditAction.PO_SHIPPING_PLAN_REMOVE,
                 AppConstants.AuditResource.PO_SHIPPING_PLAN, orderId,
                 "Removed PO " + po.getPoNumber() + " from Shipping Date " + day + " for Factory " + factory,
-                null, null);
+                AppConstants.Buyer.LULULEMON, factory);
         // The date item disappears automatically if the final PO has been removed.
         List<ShippingPo> rows = factoryPos(orderId, factory).stream()
                 .filter(row -> dates(row).contains(day))
@@ -407,11 +407,11 @@ public class PoShippingPlanService {
                     "A PO changed while deleting this Shipping Schedule. Refresh and verify the schedule before retrying.");
         }
         deleteSubmission(orderId, factory, day);
-        audit.log(actor, AppConstants.AuditAction.PO_SHIPPING_PLAN_REMOVE,
+        audit.logForFactory(actor, AppConstants.AuditAction.PO_SHIPPING_PLAN_REMOVE,
                 AppConstants.AuditResource.PO_SHIPPING_PLAN, orderId,
                 "Deleted Shipping Date " + day + " for Factory " + factory
                         + " (removed " + members.size() + " PO memberships; source POs kept)",
-                null, null);
+                AppConstants.Buyer.LULULEMON, factory);
         return Map.of("shippingDate", day.toString(), "factoryCode", factory, "removedCount", members.size());
     }
 

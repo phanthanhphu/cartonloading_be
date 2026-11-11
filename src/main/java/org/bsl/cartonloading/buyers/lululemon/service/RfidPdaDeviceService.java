@@ -7,6 +7,7 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidPdaDevice;
+import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.model.User;
 import org.bsl.cartonloading.repository.UserRepository;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidPdaCapture;
@@ -669,9 +670,15 @@ public class RfidPdaDeviceService {
         RfidPdaCapture captured = captureRepository.findById(serial)
                 .orElseThrow(() -> new IllegalArgumentException("No active capture to recover."));
         // Log first: never remove a reservation if the audit trail cannot be saved.
-        auditLogService.log(RequestActor.current(), "RFID_PDA_FORCE_RELEASE", AppConstants.AuditResource.CARTON_LOADING,
+        // The resourceId is a capture session, not a PO/Carton record; verify Factory using its stored PO.
+        PurchaseOrder capturedPo = captured.getPo() == null ? null : mongoTemplate.findById(captured.getPo(), PurchaseOrder.class);
+        String verifiedFactory = capturedPo != null
+                && AppConstants.Buyer.LULULEMON.equals(capturedPo.getBuyerCode())
+                && java.util.Objects.equals(captured.getOrder(), capturedPo.getOrderId())
+                ? capturedPo.getFactoryCode() : null;
+        auditLogService.logForFactory(RequestActor.current(), "RFID_PDA_FORCE_RELEASE", AppConstants.AuditResource.CARTON_LOADING,
                 captured.getSessionId(), "Admin physically confirmed stop. PDA=" + serial + " carton=" + captured.getSscc()
-                        + "; reason=" + cleaned, null, null);
+                        + "; reason=" + cleaned, AppConstants.Buyer.LULULEMON, verifiedFactory);
         captureRepository.deleteById(serial);
         return new CaptureResult(serial, captured.getSessionId(), "RELEASED_BY_ADMIN",
                 "Reservation released; re-check the carton session before further scanning.");

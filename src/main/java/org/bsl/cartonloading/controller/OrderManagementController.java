@@ -74,8 +74,9 @@ public class OrderManagementController {
             @RequestParam(required=false) String color,
             @RequestParam(required=false) String qty,
             @RequestParam(required=false) String dcCode,
+            @RequestParam(required=false) String channel,
             @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE) int page, @RequestParam(defaultValue = AppConstants.RequestDefault.PAGE_SIZE) int size) {
-        return service.listPos(buyer, orderId, poNumber, factory, style, sku, destination, status, exFtyDate, shippingScheduled, inspectionStatus, search, masterPo, description, color, qty, dcCode, page, size);
+        return service.listPos(buyer, orderId, poNumber, factory, style, sku, destination, status, exFtyDate, shippingScheduled, inspectionStatus, search, masterPo, description, color, qty, dcCode, channel, page, size);
     }
     @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     @GetMapping("/orders/{orderId}/pos/scheduled-inspection-summary")

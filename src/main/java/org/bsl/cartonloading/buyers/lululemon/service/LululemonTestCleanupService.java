@@ -99,8 +99,9 @@ public class LululemonTestCleanupService {
         Query orderQuery = Query.query(Criteria.where("_id").is(orderId)
                 .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
         counts.put("Order", template.remove(orderQuery, PackingOrder.class).getDeletedCount());
-        audit.log(RequestActor.current(), "TEST_PURGE_FINISHED", "LULULEMON_ORDER", orderId,
-                "Test-only cleanup of Order " + entity.getOrderName() + ": " + counts, null, null);
+        audit.logForFactory(RequestActor.current(), "TEST_PURGE_FINISHED", "LULULEMON_ORDER", orderId,
+                "Test-only cleanup of Order " + entity.getOrderName() + ": " + counts,
+                AppConstants.Buyer.LULULEMON, entity.getFactoryCode());
         return Map.of("orderId", orderId, "orderName", entity.getOrderName(), "deleted", counts);
     }
 

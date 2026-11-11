@@ -1182,7 +1182,11 @@ public class WorkflowService {
         poRepository.delete(po);
         identityRegistry.releaseAfterPoDelete(po);
 
-        audit(AppConstants.AuditAction.PO_DELETE, poId, "Deleted imported PO " + poNumber + " and its unstarted generated Cartons/Items.");
+        // After deletion, the PO can no longer be resolved by ID; preserve its verified scope now.
+        auditLogService.logForFactory(RequestActor.current(), AppConstants.AuditAction.PO_DELETE,
+                AppConstants.AuditResource.CARTON_LOADING, poId,
+                "Deleted imported PO " + poNumber + " and its unstarted generated Cartons/Items.",
+                AppConstants.Buyer.LULULEMON, po.getFactoryCode());
         socketPublisher.cartonLoadingChanged(AppConstants.SocketEvent.PO_DELETED, poId);
     }
 

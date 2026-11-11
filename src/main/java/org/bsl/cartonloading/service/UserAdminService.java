@@ -8,15 +8,19 @@ import org.bsl.cartonloading.dto.UserDTO;
 import org.bsl.cartonloading.dto.admin.UserAdminRequest;
 import org.bsl.cartonloading.model.Buyer;
 import org.bsl.cartonloading.model.User;
+import org.bsl.cartonloading.model.UserAvatar;
 import org.bsl.cartonloading.repository.BuyerRepository;
 import org.bsl.cartonloading.repository.DepartmentRepository;
 import org.bsl.cartonloading.repository.UserRepository;
+import org.bsl.cartonloading.repository.UserAvatarRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 
 import java.security.SecureRandom;
@@ -33,6 +37,7 @@ import java.util.Locale;
 public class UserAdminService {
     private static final SecureRandom PASSWORD_RANDOM = new SecureRandom();
     private final UserRepository userRepository;
+    private final UserAvatarRepository userAvatars;
     private final DepartmentRepository departmentRepository;
     private final BuyerRepository buyerRepository;
     private final PasswordEncoder passwordEncoder;
@@ -42,8 +47,10 @@ public class UserAdminService {
     private final AppSocketPublisher socketPublisher;
 
     public UserAdminService(UserRepository userRepository, DepartmentRepository departmentRepository, BuyerRepository buyerRepository,
-                            PasswordEncoder passwordEncoder, UserService userService, AuditLogService audit, FactoryCatalogService factories, AppSocketPublisher socketPublisher) {
+                            PasswordEncoder passwordEncoder, UserService userService, AuditLogService audit, FactoryCatalogService factories, AppSocketPublisher socketPublisher,
+                            UserAvatarRepository userAvatars) {
         this.userRepository = userRepository;
+        this.userAvatars = userAvatars;
         this.departmentRepository = departmentRepository;
         this.buyerRepository = buyerRepository;
         this.passwordEncoder = passwordEncoder;
@@ -78,7 +85,10 @@ public class UserAdminService {
         return new PageImpl<>(rows.subList(from, to), pageable, rows.size());
     }
 
-    public UserDTO create(UserAdminRequest request) {
+    public UserDTO create(UserAdminRequest request) { return createWithAvatar(request, null); }
+
+    /** Create user + normalized photo; compensate if storing the photo fails. */
+    public UserDTO createWithAvatar(UserAdminRequest request, byte[] normalizedJpeg) {
         if (clean(request.password()) == null) throw new IllegalArgumentException(AppMessages.PASSWORD_REQUIRED);
         if (userRepository.findByEmailIgnoreCase(request.email().trim()).isPresent()) throw new IllegalArgumentException(AppMessages.EMAIL_ALREADY_EXISTS);
         User user = new User();
@@ -86,6 +96,22 @@ public class UserAdminService {
         user.setTokenVersion(1L);
         apply(user, request, true);
         User saved = userRepository.save(user);
+        if (normalizedJpeg != null) {
+            try {
+                userAvatars.save(new UserAvatar(saved.getId(), normalizedJpeg));
+            } catch (RuntimeException cause) {
+                // A failed photo write must not leave a silently created account behind.
+                try {
+                    userRepository.deleteById(saved.getId());
+                } catch (RuntimeException rollbackError) {
+                    cause.addSuppressed(rollbackError);
+                    throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "User was created but avatar storage and account rollback both failed. Contact Admin; do not create a duplicate account.", cause);
+                }
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Photo storage failed; new user account was rolled back. Please retry.", cause);
+            }
+        }
         audit.logChange(RequestActor.current(), AppConstants.AuditAction.CREATE, AppConstants.AuditResource.USER, saved.getId(), AppMessages.userCreatedAudit(saved.getEmail()), null, null, null, saved, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.CREATE);
         return userService.toUserDTO(saved);
@@ -236,6 +262,8 @@ public class UserAdminService {
             throw new IllegalArgumentException(AppMessages.LAST_ADMIN_DELETE_BLOCKED);
         }
         userRepository.delete(user);
+        // Removing the user also removes their private profile image.
+        userAvatars.deleteById(id);
         audit.logChange(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.USER, id, AppMessages.userDeletedAudit(user.getEmail()), null, null, user, null, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.USER, AppConstants.AuditAction.DELETE);
         // Deleted accounts must also be pushed out immediately; their JWTs are rejected

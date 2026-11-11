@@ -169,12 +169,22 @@ public class OrderManagementService {
                 shippingScheduled, inspectionStatus, search, masterPo, description, color, qty, null, page, size);
     }
 
-    // DC Code is an independent server-side ALL_BP filter; pagination must occur after filtering.
+    // Retain the DC Code overload for existing callers; Chanel is an optional ALL_BP filter.
     public Page<PoManagementRow> listPos(String buyer, String orderId, String poNumber, String factory,
                                              String style, String sku, String destination, String status,
                                              java.time.LocalDate exFtyDate, Boolean shippingScheduled, String inspectionStatus,
                                              String search, String masterPo, String description, String color, String qty,
                                              String dcCode, int page, int size) {
+        return listPos(buyer, orderId, poNumber, factory, style, sku, destination, status, exFtyDate,
+                shippingScheduled, inspectionStatus, search, masterPo, description, color, qty, dcCode, null, page, size);
+    }
+
+    // ALL_BP filters run on the full Order before pagination, including persisted PO.channel.
+    public Page<PoManagementRow> listPos(String buyer, String orderId, String poNumber, String factory,
+                                             String style, String sku, String destination, String status,
+                                             java.time.LocalDate exFtyDate, Boolean shippingScheduled, String inspectionStatus,
+                                             String search, String masterPo, String description, String color, String qty,
+                                             String dcCode, String channel, int page, int size) {
         String code = requiredBuyer(buyer);
         orders.getEntity(code, orderId);
         int safePage = Math.max(0, page);
@@ -191,6 +201,7 @@ public class OrderManagementService {
             List<PurchaseOrder> filteredPos = purchaseOrders.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, code).stream()
                     .filter(po -> matches(po.getPoNumber(), poNumber))
                     .filter(po -> matches(po.getDcCode(), dcCode))
+                    .filter(po -> matches(po.getChannel(), channel))
                     .filter(po -> matches(po.getMasterPo(), masterPo))
                     .filter(po -> matches(po.getDescription(), description))
                     .filter(po -> matches(po.getColor(), color))

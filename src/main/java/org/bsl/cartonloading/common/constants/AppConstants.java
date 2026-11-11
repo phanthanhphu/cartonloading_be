@@ -53,6 +53,7 @@ public final class AppConstants {
 
     public static final class Collection {
         public static final String USERS = "users";
+        public static final String USER_AVATARS = "user_avatars";
         public static final String DEPARTMENTS = "departments";
         public static final String FACTORIES = "factories";
         public static final String BUYERS = "buyers";

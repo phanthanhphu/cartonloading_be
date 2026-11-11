@@ -2,6 +2,12 @@ package org.bsl.cartonloading.controller;
 
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.buyers.core.BuyerWorkflowRegistry;
+import org.bsl.cartonloading.common.constants.AppConstants;
+import org.bsl.cartonloading.model.Buyer;
+import org.bsl.cartonloading.model.Factory;
+import org.bsl.cartonloading.service.FactoryCatalogService;
+import org.bsl.cartonloading.service.AuditLogService;
+import org.springframework.security.core.Authentication;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
 import org.bsl.cartonloading.model.SystemType;
@@ -25,13 +31,17 @@ public class AuthController {
     private final PasswordEncoder passwordEncoder;
     private final BuyerService buyerService;
     private final BuyerWorkflowRegistry workflowRegistry;
+    private final FactoryCatalogService factoryCatalog;
+    private final AuditLogService audit;
 
-    public AuthController(UserService userService, JwtUtil jwtUtil, PasswordEncoder passwordEncoder, BuyerService buyerService, BuyerWorkflowRegistry workflowRegistry) {
+    public AuthController(UserService userService, JwtUtil jwtUtil, PasswordEncoder passwordEncoder, BuyerService buyerService, BuyerWorkflowRegistry workflowRegistry, FactoryCatalogService factoryCatalog, AuditLogService audit) {
         this.userService = userService;
         this.jwtUtil = jwtUtil;
         this.passwordEncoder = passwordEncoder;
         this.buyerService = buyerService;
         this.workflowRegistry = workflowRegistry;
+        this.factoryCatalog = factoryCatalog;
+        this.audit = audit;
     }
 
     @PostMapping("/login")
@@ -92,6 +102,111 @@ public class AuthController {
         response.put("selectedBuyer", selectedBuyer);
         response.put("selectedType", selectedType);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Server-authorized workspace choices. Never trust localStorage or login-options
+     * for permission decisions. Only ACTIVE Buyers, approved Types, and implemented
+     * workflows are returned. The LULULEMON Factory catalog is the only one
+     * currently backed by a shared Factory master.
+     */
+    @GetMapping("/context-options")
+    public ResponseEntity<?> contextOptions(Authentication authentication) {
+        User user = authenticatedUser(authentication);
+        if (user == null) return ResponseEntity.status(401).body(Map.of("message", "Session is no longer valid"));
+        return ResponseEntity.ok(Map.of("options", authorizedContexts(user)));
+    }
+
+    @PostMapping("/switch-context")
+    public ResponseEntity<?> switchContext(@RequestBody SwitchContextRequest request, Authentication authentication) {
+        User user = authenticatedUser(authentication);
+        if (user == null) return ResponseEntity.status(401).body(Map.of("message", "Session is no longer valid"));
+        if (request == null) return ResponseEntity.badRequest().body(Map.of("message", "Select Buyer and Type"));
+
+        String selectedBuyer = BuyerAccess.normalize(request.getBuyerCode());
+        String selectedType = SystemType.normalize(request.getSystemType());
+        String selectedFactory = User.normalizeFactoryCode(request.getFactoryCode());
+        if (selectedBuyer.isEmpty() || selectedType.isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("message", "Select a valid Buyer and Type"));
+
+        // Re-evaluate permissions and Buyer state from MongoDB on each Apply.
+        ContextOption authorized = authorizedContexts(user).stream()
+                .filter(option -> option.buyerKey().equals(selectedBuyer))
+                .findFirst().orElse(null);
+        if (authorized == null || !authorized.supportedTypes().contains(selectedType))
+            return ResponseEntity.status(403).body(Map.of("message", "Buyer / Type is not approved for this account"));
+
+        if (AppConstants.Buyer.LULULEMON.equals(selectedBuyer)) {
+            if (!selectedFactory.isEmpty() && !authorized.factories().contains(selectedFactory))
+                return ResponseEntity.status(403).body(Map.of("message", "Factory is inactive or not assigned"));
+            if (!authorized.factories().isEmpty() && selectedFactory.isEmpty())
+                return ResponseEntity.badRequest().body(Map.of("message", "Please select an active Factory"));
+        } else if (!selectedFactory.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Factory catalog is not available for this Buyer"));
+        }
+
+        String token = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getTokenVersion(),
+                user.getAccessPermissions(), user.getBuyerPermissions(), selectedBuyer, selectedType);
+        // Log the context change without logging JWT or credentials.
+        audit.logChange(user.getEmail(), "SWITCH_CONTEXT", AppConstants.AuditResource.USER, user.getId(),
+                "Switched workspace to " + selectedBuyer + " / " + selectedType
+                        + (selectedFactory.isEmpty() ? "" : " / " + selectedFactory),
+                selectedBuyer, selectedFactory.isEmpty() ? null : selectedFactory,
+                null, null, null, null);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("token", token);
+        response.put("user", userService.toUserDTO(user));
+        response.put("selectedBuyer", selectedBuyer);
+        response.put("selectedType", selectedType);
+        response.put("selectedFactory", selectedFactory);
+        return ResponseEntity.ok(response);
+    }
+
+    private User authenticatedUser(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication.getName() == null || authentication.getName().isBlank()) return null;
+        return userService.findByEmail(authentication.getName()).filter(User::isEnabled).orElse(null);
+    }
+
+    private List<ContextOption> authorizedContexts(User user) {
+        return buyerService.loginOptions().stream()
+                .filter(Buyer::isActive)
+                .filter(buyer -> user.canAccessBuyer(buyer.getBuyerKey())
+                        && user.hasAnyAccessForBuyer(buyer.getBuyerKey()))
+                .map(buyer -> {
+                    String buyerCode = BuyerAccess.normalize(buyer.getBuyerKey());
+                    List<String> types = buyer.getSupportedTypes().stream()
+                            .filter(type -> user.canAccessBuyerType(buyerCode, type)
+                                    && workflowRegistry.hasImplementedWorkflow(buyerCode, type))
+                            .toList();
+                    if (types.isEmpty()) return null;
+                    List<String> factories = AppConstants.Buyer.LULULEMON.equals(buyerCode)
+                            ? factoryCatalog.list(buyerCode, false).stream()
+                                .map(Factory::getCode)
+                                .filter(user::canAccessFactory)
+                                .toList()
+                            : List.of();
+                    return new ContextOption(buyerCode, buyer.getBuyerName(), buyer.getSlug(),
+                            types, factories);
+                })
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    public record ContextOption(String buyerKey, String buyerName, String slug,
+                                List<String> supportedTypes, List<String> factories) { }
+
+    public static class SwitchContextRequest {
+        private String buyerCode;
+        private String systemType;
+        private String factoryCode;
+        public String getBuyerCode() { return buyerCode; }
+        public void setBuyerCode(String buyerCode) { this.buyerCode = buyerCode; }
+        public String getSystemType() { return systemType; }
+        public void setSystemType(String systemType) { this.systemType = systemType; }
+        public String getFactoryCode() { return factoryCode; }
+        public void setFactoryCode(String factoryCode) { this.factoryCode = factoryCode; }
     }
 
     /** Read-only revoke notice. Works with signed, unexpired stale JWTs so a disconnected client can show the reason. */
