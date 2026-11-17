@@ -2,7 +2,7 @@ package org.bsl.cartonloading.buyers.lululemon.service;
 
 import org.bsl.cartonloading.common.exception.WorkflowNotFoundException;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.buyers.lululemon.dto.CheckingResultRequest;
 import org.bsl.cartonloading.buyers.lululemon.dto.CheckingSearchResponse;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
@@ -29,7 +29,7 @@ import java.util.*;
 public class CartonCheckingService {
     private static final String BUYER = AppConstants.Buyer.LULULEMON;
     private static final int MAX_CARTONS = 200;
-    private final PackingOrderService orderService;
+    private final BuyerOrderLookupService orderService;
     private final PurchaseOrderRepository poRepository;
     private final CartonRepository cartonRepository;
     private final CartonCheckingRepository checkingRepository;
@@ -37,7 +37,7 @@ public class CartonCheckingService {
     private final AuditLogService auditLogService;
     private final SelectedFactoryScope selectedFactoryScope;
 
-    public CartonCheckingService(PackingOrderService orderService,
+    public CartonCheckingService(BuyerOrderLookupService orderService,
                                  PurchaseOrderRepository poRepository,
                                  CartonRepository cartonRepository,
                                  CartonCheckingRepository checkingRepository,

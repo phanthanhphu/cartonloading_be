@@ -1,6 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -27,14 +27,14 @@ import java.util.*;
 @Service
 public class FactoryPackingImportService {
     private final ExcelImportSupport excel;
-    private final PackingOrderService orders;
+    private final BuyerOrderLookupService orders;
     private final BuyerFactoryAccessService factories;
     private final PurchaseOrderRepository pos;
     private final CartonRepository cartons;
     private final WorkflowService workflow;
     private final PackingImportBatchRepository batches;
 
-    public FactoryPackingImportService(ExcelImportSupport excel, PackingOrderService orders, BuyerFactoryAccessService factories,
+    public FactoryPackingImportService(ExcelImportSupport excel, BuyerOrderLookupService orders, BuyerFactoryAccessService factories,
                                        PurchaseOrderRepository pos, CartonRepository cartons,
                                        WorkflowService workflow, PackingImportBatchRepository batches) {
         this.excel = excel; this.orders = orders; this.factories = factories; this.pos = pos;

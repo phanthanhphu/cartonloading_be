@@ -5,7 +5,7 @@ import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.FactoryBarcode;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
 import org.bsl.cartonloading.buyers.es.model.PackingListLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.model.Shipment;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.springframework.data.mongodb.core.mapping.event.BeforeConvertCallback;
@@ -18,7 +18,7 @@ public class BuyerKeyBeforeConvertCallback implements BeforeConvertCallback<Obje
     public Object onBeforeConvert(Object entity, String collection) {
         if (entity instanceof CartonProcessingHistory row)
             row.setBuyerKey(key(row.getBuyerCode()));
-        else if (entity instanceof PackingOrder row) row.setBuyerKey(key(row.getBuyerCode()));
+        else if (entity instanceof OrderDocument row) row.setBuyerKey(key(row.getBuyerCode()));
         else if (entity instanceof PackingListLine row) row.setBuyerKey(key(row.getBuyerCode()));
         else if (entity instanceof PackingAllocationLine row) row.setBuyerKey(key(row.getBuyerCode()));
         else if (entity instanceof CartonScanTransaction row) row.setBuyerKey(key(row.getBuyerCode()));

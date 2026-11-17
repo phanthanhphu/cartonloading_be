@@ -1,5 +1,5 @@
 package org.bsl.cartonloading.controller;
-import org.bsl.cartonloading.service.facade.CartonCheckingFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.CartonCheckingFacade;
 
 import org.bsl.cartonloading.buyers.lululemon.dto.CheckingResultRequest;
 import org.bsl.cartonloading.buyers.lululemon.dto.CheckingSearchResponse;

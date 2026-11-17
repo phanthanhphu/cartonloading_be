@@ -19,7 +19,7 @@ import org.apache.poi.ss.util.CellRangeAddressList;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
 import org.bsl.cartonloading.buyers.es.model.PackingListLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.repository.PackingAllocationLineRepository;
 import org.bsl.cartonloading.buyers.es.repository.PackingListLineRepository;
 import org.springframework.stereotype.Service;
@@ -48,7 +48,7 @@ public class OrderPackingExcelExportService {
     }
 
     public byte[] exportMaster(String buyerCode, String orderId) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         List<PackingAllocationLine> lines = masterRepository.findByOrderIdAndBuyerCode(order.getId(), order.getBuyerCode()).stream()
                 .sorted(Comparator.comparing(PackingAllocationLine::getLineNo, Comparator.nullsLast(Integer::compareTo)))
                 .toList();
@@ -117,7 +117,7 @@ public class OrderPackingExcelExportService {
     }
 
     public byte[] exportPackingList(String buyerCode, String orderId) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         List<PackingListLine> lines = packingRepository.findByOrderIdAndBuyerCode(order.getId(), order.getBuyerCode()).stream()
                 .sorted(Comparator.comparing(PackingListLine::getLineNo, Comparator.nullsLast(Integer::compareTo)))
                 .toList();

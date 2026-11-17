@@ -104,14 +104,21 @@ public class User {
         if (values != null) for (String raw : values) {
             if (raw == null) continue;
             String code = raw.trim().toUpperCase(Locale.ROOT);
+            if (AppConstants.Permission.LULU_MANAGEMENT_REPORT_VIEW.equals(code)
+                    || AppConstants.Permission.LULU_MANAGEMENT_REPORT_EXPORT.equals(code)) continue;
             if (AppConstants.Permission.LULU_UPLOAD_EDIT_DATA.equals(code)
                     || AppConstants.Permission.LULU_SHIPPING_SCHEDULER.equals(code)
                     || AppConstants.Permission.LULU_SHIPPING_SCHEDULE_CREATE.equals(code)
                     || AppConstants.Permission.LULU_SHIPPING_SCHEDULE_REOPEN.equals(code)
+                    || AppConstants.Permission.LULU_MANAGEMENT_REPORT_ALL.equals(code)
+                    || AppConstants.Permission.LULU_MANAGEMENT_REPORT_ASSIGNED.equals(code)
                     || AppConstants.Permission.LULU_SCAN_RFID_SSCC_SKU_WEIGHT.equals(code)
                     || AppConstants.Permission.LULU_VIEW_ONLY.equals(code)) permissions.add(code);
             else throw new IllegalArgumentException("Invalid LULULEMON permission: " + code);
         }
+        if (permissions.contains(AppConstants.Permission.LULU_MANAGEMENT_REPORT_ALL)
+                && permissions.contains(AppConstants.Permission.LULU_MANAGEMENT_REPORT_ASSIGNED))
+            throw new IllegalArgumentException("Choose only one Management Reports scope: All or Assigned");
         if (permissions.contains(AppConstants.Permission.LULU_VIEW_ONLY) && permissions.size() > 1)
             throw new IllegalArgumentException("LULULEMON View Only cannot be combined with write permissions");
         return new ArrayList<>(permissions);
@@ -185,6 +192,26 @@ public class User {
     }
     public boolean canLululemonScanWeight() {
         return hasLululemonPermission(AppConstants.Permission.LULU_SCAN_RFID_SSCC_SKU_WEIGHT);
+    }
+    /** Report scope is an explicit Buyer grant for EVERY role, including ADMIN.
+     * Legacy VIEW/EXPORT grants do not silently imply a new report scope.
+     */
+    public boolean canLululemonReportAllFactories() {
+        return canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                && getBuyerAccessPermissions().getOrDefault(AppConstants.Buyer.LULULEMON, List.of())
+                    .contains(AppConstants.Permission.LULU_MANAGEMENT_REPORT_ALL);
+    }
+    public boolean canLululemonReportAssignedFactories() {
+        return canAccessBuyer(AppConstants.Buyer.LULULEMON)
+                && getBuyerAccessPermissions().getOrDefault(AppConstants.Buyer.LULULEMON, List.of())
+                    .contains(AppConstants.Permission.LULU_MANAGEMENT_REPORT_ASSIGNED);
+    }
+    public boolean canLululemonViewManagementReports() {
+        return canLululemonReportAllFactories()
+                || (canLululemonReportAssignedFactories() && !getFactoryPermissions().isEmpty());
+    }
+    public boolean canLululemonExportManagementReports() {
+        return canLululemonViewManagementReports(); // Export follows the exact same report scope.
     }
     public boolean canLululemonRead() {
         return isAdminRole() || (canAccessBuyer(AppConstants.Buyer.LULULEMON)

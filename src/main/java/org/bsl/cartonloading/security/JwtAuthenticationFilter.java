@@ -90,7 +90,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     static boolean matchesRequestWorkspace(HttpServletRequest request, String buyer, String type) {
         String path = request.getRequestURI();
         if (path.startsWith("/api/buyers/")) {
-            String segment = path.substring("/api/buyers/".length()).split("/", 2)[0];
+            String remainder = path.substring("/api/buyers/".length());
+            // PUT/DELETE /api/buyers/{id} are top-level ADMIN management endpoints.
+            // {id} is a 24-char Mongo document id, not a Buyer Key. Do not reject a valid
+            // ADMIN operation by comparing this id against the login workspace.
+            // BuyerController still enforces @PreAuthorize(isAdmin), and normal
+            // Buyer workflow routes (which have additional path segments) remain scoped.
+            if (remainder.matches("[0-9a-fA-F]{24}")
+                    && ("PUT".equalsIgnoreCase(request.getMethod())
+                        || "DELETE".equalsIgnoreCase(request.getMethod()))) {
+                return true;
+            }
+            String segment = remainder.split("/", 2)[0];
             if (!segment.equals("login-options") && !segment.equals("accessible")) {
                 String pathBuyer = BuyerAccess.normalize(segment);
                 if (!pathBuyer.equals(buyer)) return false;

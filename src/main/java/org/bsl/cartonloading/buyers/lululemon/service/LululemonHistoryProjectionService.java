@@ -1,6 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidScanSession;
@@ -42,7 +42,7 @@ public class LululemonHistoryProjectionService {
                 || po.getFactoryCode() == null || carton.getFactoryCode() == null
                 || !po.getFactoryCode().equalsIgnoreCase(carton.getFactoryCode()))
             throw new IllegalArgumentException("History PO/Carton ownership mismatch");
-        PackingOrder order = mongo.findById(carton.getOrderId(), PackingOrder.class);
+        OrderDocument order = mongo.findById(carton.getOrderId(), OrderDocument.class);
         if (order == null || !AppConstants.Buyer.LULULEMON.equals(order.getBuyerCode()))
             throw new IllegalArgumentException("History Order ownership mismatch");
         RfidScanSession session = carton.getRfidSessionId() == null ? null

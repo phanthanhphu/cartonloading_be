@@ -1,6 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.dto;
 
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.model.ShippingSchedule;
@@ -16,6 +16,6 @@ public record WeighingLookupResponse(
         WeightProfile profile,
         BigDecimal expectedWeightKg,
         String message,
-        PackingOrder order,
+        OrderDocument order,
         ShippingSchedule shippingSchedule
 ) { }

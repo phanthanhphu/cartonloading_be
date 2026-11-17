@@ -3,7 +3,7 @@ package org.bsl.cartonloading.controller;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.lululemon.model.StationDeviceBinding;
 import org.bsl.cartonloading.buyers.lululemon.service.StationDeviceBindingService;
-import org.bsl.cartonloading.service.facade.StationDeviceBindingFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.StationDeviceBindingFacade;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;

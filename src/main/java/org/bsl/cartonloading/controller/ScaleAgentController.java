@@ -2,7 +2,7 @@ package org.bsl.cartonloading.controller;
 
 import org.bsl.cartonloading.buyers.lululemon.agent.ScaleAgentBroker;
 import org.bsl.cartonloading.common.constants.AppConstants;
-import org.bsl.cartonloading.service.facade.ScalePlcDeviceFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.ScalePlcDeviceFacade;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;

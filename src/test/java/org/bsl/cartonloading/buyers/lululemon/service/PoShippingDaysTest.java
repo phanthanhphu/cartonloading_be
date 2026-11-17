@@ -7,8 +7,8 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.buyers.lululemon.dto.PoShippingPlanRequest;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
@@ -34,7 +34,7 @@ import static org.mockito.Mockito.*;
 class PoShippingDaysTest {
     private static final String BUYER = "LULULEMON";
     private static final String ORDER = "order-1";
-    private final PackingOrderService orders = mock(PackingOrderService.class);
+    private final BuyerOrderLookupService orders = mock(BuyerOrderLookupService.class);
     private final PurchaseOrderRepository pos = mock(PurchaseOrderRepository.class);
     private final BuyerFactoryAccessService access = mock(BuyerFactoryAccessService.class);
     private final FactoryCatalogService factories = mock(FactoryCatalogService.class);
@@ -53,7 +53,7 @@ class PoShippingDaysTest {
     }
 
     @Test void groupsDifferentPosByOneDateAndAllowsPoInMultipleDates() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.constrain(BUYER, "F3")).thenReturn("F3");
         when(pos.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(ORDER, BUYER)).thenReturn(List.of(
                 po("a", "1001", LocalDate.of(2026, 11, 10), LocalDate.of(2026, 11, 15)),
@@ -67,7 +67,7 @@ class PoShippingDaysTest {
     }
 
     @Test void alreadyScheduledPoCannotBeAddedToAnotherDate() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.requested(BUYER)).thenReturn("F3");
         when(pos.findByIdAndOrderIdAndBuyerCode("a", ORDER, BUYER))
                 .thenReturn(Optional.of(po("a", "1001", LocalDate.of(2026, 11, 10))));
@@ -78,7 +78,7 @@ class PoShippingDaysTest {
     }
 
     @Test void alreadyScheduledPoWithArrayOnlyCannotBeAddedToAnotherDate() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.requested(BUYER)).thenReturn("F3");
         when(pos.findByIdAndOrderIdAndBuyerCode("a", ORDER, BUYER))
                 .thenReturn(Optional.of(po("a", "1001", null, LocalDate.of(2026, 11, 10))));
@@ -88,7 +88,7 @@ class PoShippingDaysTest {
     }
 
     @Test void unassignedPoCanBeAddedOnce() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.requested(BUYER)).thenReturn("F3");
         when(pos.findByIdAndOrderIdAndBuyerCode("a", ORDER, BUYER))
                 .thenReturn(Optional.of(po("a", "1001", null)));
@@ -101,8 +101,23 @@ class PoShippingDaysTest {
         verify(mongo, times(2)).updateMulti(any(Query.class), any(Update.class), eq(PurchaseOrder.class));
     }
 
+    @Test void newScheduleCannotUsePastOrCurrentVietnamDate() {
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
+        when(selected.requested(BUYER)).thenReturn("F3");
+        when(pos.findByIdAndOrderIdAndBuyerCode("a", ORDER, BUYER))
+                .thenReturn(Optional.of(po("a", "1001", null)));
+        when(accessControl.canCreateShippingSchedule()).thenReturn(true);
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
+        for (LocalDate date : List.of(today.minusDays(1), today)) {
+            var error = assertThrows(ResponseStatusException.class, () ->
+                    service.schedule(BUYER, ORDER, new PoShippingPlanRequest(date, List.of("a"))));
+            assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, error.getStatusCode());
+        }
+        verify(mongo, never()).updateMulti(any(Query.class), any(Update.class), eq(PurchaseOrder.class));
+    }
+
     @Test void newScheduleRequiresExplicitCreateGrant() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.requested(BUYER)).thenReturn("F3");
         when(pos.findByIdAndOrderIdAndBuyerCode("a", ORDER, BUYER))
                 .thenReturn(Optional.of(po("a", "1001", null)));
@@ -114,7 +129,7 @@ class PoShippingDaysTest {
 
     @Test void createGrantCannotModifyExistingScheduleWithoutSchedulerGrant() {
         LocalDate day = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).plusDays(5);
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.requested(BUYER)).thenReturn("F3");
         when(pos.findByIdAndOrderIdAndBuyerCode("new", ORDER, BUYER))
                 .thenReturn(Optional.of(po("new", "1002", null)));
@@ -128,7 +143,7 @@ class PoShippingDaysTest {
 
     @Test void schedulerCanStillAddToExistingDateWithoutCreateGrant() {
         LocalDate day = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).plusDays(5);
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.requested(BUYER)).thenReturn("F3");
         when(pos.findByIdAndOrderIdAndBuyerCode("new", ORDER, BUYER))
                 .thenReturn(Optional.of(po("new", "1002", null)));
@@ -141,8 +156,25 @@ class PoShippingDaysTest {
         assertEquals(1L, response.get("scheduledCount"));
     }
 
+    @Test void explicitlyReopenedOldScheduleCanStillReceivePos() {
+        LocalDate day = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).minusDays(3);
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
+        when(selected.requested(BUYER)).thenReturn("F3");
+        when(pos.findByIdAndOrderIdAndBuyerCode("new", ORDER, BUYER))
+                .thenReturn(Optional.of(po("new", "1002", null)));
+        when(pos.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(ORDER, BUYER))
+                .thenReturn(List.of(po("old", "1001", day)));
+        when(accessControl.canManageShipping()).thenReturn(true);
+        when(mongo.findById(anyString(), eq(Document.class), eq("po_shipping_day_submissions")))
+                .thenReturn(new Document("state", "REOPENED"));
+        when(mongo.updateMulti(any(Query.class), any(Update.class), eq(PurchaseOrder.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1, null));
+        var response = service.schedule(BUYER, ORDER, new PoShippingPlanRequest(day, List.of("new")));
+        assertEquals(1L, response.get("scheduledCount"));
+    }
+
     @Test void duplicatePoOnSameDateIsRejectedWithoutAnyWrites() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.requested(BUYER)).thenReturn("F3");
         when(pos.findByIdAndOrderIdAndBuyerCode("a", ORDER, BUYER))
                 .thenReturn(Optional.of(po("a", "1001", LocalDate.of(2026, 11, 15))));
@@ -152,7 +184,7 @@ class PoShippingDaysTest {
     }
 
     @Test void cannotDeleteWholeScheduleAfterShippingDate() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.constrain(BUYER, "F3")).thenReturn("F3");
         LocalDate yesterday = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).minusDays(1);
         assertThrows(ResponseStatusException.class,
@@ -161,7 +193,7 @@ class PoShippingDaysTest {
     }
 
     @Test void deleteFutureDateOnlyRemovesShippingMembershipsNotPos() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.constrain(BUYER, "F3")).thenReturn("F3");
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).plusDays(1);
         LocalDate otherDate = today.plusDays(2);
@@ -177,7 +209,7 @@ class PoShippingDaysTest {
 
 
     @Test void automaticallySubmitsShippingDateInVietnamAndLocksEdits() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.constrain(BUYER, "F3")).thenReturn("F3");
         LocalDate day = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
         PurchaseOrder current = po("a", "1001", day);
@@ -194,7 +226,7 @@ class PoShippingDaysTest {
     }
 
     @Test void manualSubmitPersistsLockEvenBeforeScheduledDay() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.constrain(BUYER, "F3")).thenReturn("F3");
         LocalDate day = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).plusDays(2);
         when(pos.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(ORDER, BUYER))
@@ -209,14 +241,14 @@ class PoShippingDaysTest {
     }
 
     @Test void userWithoutReopenGrantCannotUnsubmit() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         LocalDate day = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh"));
         assertThrows(AccessDeniedException.class, () -> service.unsubmitDay(BUYER, ORDER, "F3", day));
         verify(mongo, never()).upsert(any(Query.class), any(Update.class), anyString());
     }
 
     @Test void grantedUserCanReopenPastDateAndItStaysEditable() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.constrain(BUYER, "F3")).thenReturn("F3");
         LocalDate day = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).minusDays(1);
         when(pos.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(ORDER, BUYER))
@@ -242,7 +274,7 @@ class PoShippingDaysTest {
     }
 
     @Test void removalOnlyRemovesMembershipWithoutDeletingOriginalPo() {
-        when(orders.getEntity(BUYER, ORDER)).thenReturn(new PackingOrder());
+        when(orders.getEntity(BUYER, ORDER)).thenReturn(new OrderDocument());
         when(selected.constrain(BUYER, "F3")).thenReturn("F3");
         LocalDate assigned = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).plusDays(10);
         PurchaseOrder po = po("a", "1001", assigned, assigned.plusDays(5));

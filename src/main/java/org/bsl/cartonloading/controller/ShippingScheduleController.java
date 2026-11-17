@@ -1,6 +1,6 @@
 package org.bsl.cartonloading.controller;
 import org.bsl.cartonloading.common.constants.AppConstants;
-import org.bsl.cartonloading.service.facade.ShippingScheduleFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.ShippingScheduleFacade;
 
 import org.bsl.cartonloading.buyers.lululemon.dto.*;
 import org.bsl.cartonloading.buyers.lululemon.model.WeighingResult;

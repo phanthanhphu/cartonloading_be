@@ -1,5 +1,5 @@
 package org.bsl.cartonloading.controller;
-import org.bsl.cartonloading.service.facade.ShipmentFacade;
+import org.bsl.cartonloading.buyers.es.service.facade.ShipmentFacade;
 
 import org.bsl.cartonloading.common.constants.AppConstants;
 

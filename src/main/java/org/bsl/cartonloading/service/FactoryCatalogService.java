@@ -17,8 +17,11 @@ public class FactoryCatalogService {
     private final FactoryRepository repository;
     private final AuditLogService audit;
     private final AppSocketPublisher socketPublisher;
-    public FactoryCatalogService(FactoryRepository repository, AuditLogService audit, AppSocketPublisher socketPublisher) {
+    private final FactoryUsageService factoryUsage;
+    public FactoryCatalogService(FactoryRepository repository, AuditLogService audit,
+                                 AppSocketPublisher socketPublisher, FactoryUsageService factoryUsage) {
         this.repository = repository; this.audit = audit; this.socketPublisher = socketPublisher;
+        this.factoryUsage = factoryUsage;
     }
     public List<Factory> list(String buyerKey, boolean includeInactive) {
         if (!AppConstants.Buyer.LULULEMON.equalsIgnoreCase(buyerKey))
@@ -52,6 +55,27 @@ public class FactoryCatalogService {
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.FACTORY, AppConstants.AuditAction.CREATE);
         return saved;
     }
+    /** ADMIN only (controller). Never cascade/delete referenced operational records. */
+    public void delete(String id) {
+        Factory factory = repository.findById(id)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Factory not found"));
+        String code = FactoryCodes.requireValid(factory.getCode());
+        List<String> usage = factoryUsage.findUsage(code);
+        if (!usage.isEmpty()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "Factory " + code + " cannot be deleted because it is used by: "
+                            + String.join(", ", usage) + ". Remove its assignments/dependencies first, or deactivate it.");
+        }
+        java.util.Map<String, Object> before = audit.snapshot(factory);
+        repository.delete(factory);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.FACTORY,
+                factory.getId(), "Factory " + code, AppConstants.Buyer.LULULEMON,
+                code, before, null, null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.FACTORY, AppConstants.AuditAction.DELETE);
+    }
+
     public Factory update(String id, FactoryRequest request) {
         Factory f = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Factory not found"));
         if (!FactoryCodes.requireValid(request.code()).equals(f.getCode()))

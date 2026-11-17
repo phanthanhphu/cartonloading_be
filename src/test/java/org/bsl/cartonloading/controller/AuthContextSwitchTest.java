@@ -1,6 +1,8 @@
 package org.bsl.cartonloading.controller;
 
 import org.bsl.cartonloading.buyers.core.BuyerWorkflowRegistry;
+import org.bsl.cartonloading.buyers.core.BuyerWorkspaceFactoryPolicies;
+import org.bsl.cartonloading.buyers.lululemon.service.LululemonWorkspaceFactoryPolicy;
 import org.bsl.cartonloading.model.Buyer;
 import org.bsl.cartonloading.model.Factory;
 import org.bsl.cartonloading.model.User;
@@ -31,7 +33,8 @@ class AuthContextSwitchTest {
     private final FactoryCatalogService factories = mock(FactoryCatalogService.class);
     private final AuditLogService audit = mock(AuditLogService.class);
     private final AuthController controller = new AuthController(users, jwt,
-            mock(PasswordEncoder.class), buyers, workflows, factories, audit);
+            mock(PasswordEncoder.class), buyers, workflows,
+            new BuyerWorkspaceFactoryPolicies(List.of(new LululemonWorkspaceFactoryPolicy(factories))), audit);
 
     private UsernamePasswordAuthenticationToken admin() {
         User user = new User();

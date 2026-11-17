@@ -28,11 +28,14 @@ public class BuyerService {
     private final BuyerRepository buyerRepository;
     private final UserRepository userRepository;
     private final AuditLogService audit;
+    private final BuyerUsageService buyerUsage;
 
-    public BuyerService(BuyerRepository buyerRepository, UserRepository userRepository, AuditLogService audit) {
+    public BuyerService(BuyerRepository buyerRepository, UserRepository userRepository,
+                        AuditLogService audit, BuyerUsageService buyerUsage) {
         this.buyerRepository = buyerRepository;
         this.userRepository = userRepository;
         this.audit = audit;
+        this.buyerUsage = buyerUsage;
     }
 
     @PostConstruct
@@ -122,7 +125,16 @@ public class BuyerService {
         boolean assigned = userRepository.findAll().stream()
                 .filter(u -> !u.isAdminRole())
                 .anyMatch(u -> u.getBuyerPermissions().contains(key));
-        if (assigned) throw new IllegalArgumentException(AppMessages.BUYER_ASSIGNED_TO_USERS);
+        if (assigned) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.CONFLICT, AppMessages.BUYER_ASSIGNED_TO_USERS);
+        List<String> usage = buyerUsage.findUsage(key);
+        if (!usage.isEmpty()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "Buyer " + key + " cannot be deleted while used by: "
+                            + String.join(", ", usage)
+                            + ". Remove related data/assignments or deactivate the Buyer.");
+        }
         buyerRepository.delete(buyer);
         audit.logChange(RequestActor.current(), AppConstants.AuditAction.DELETE, AppConstants.AuditResource.BUYER, id, AppMessages.buyerDeletedAudit(key), key, null, buyer, null, null, null);
     }

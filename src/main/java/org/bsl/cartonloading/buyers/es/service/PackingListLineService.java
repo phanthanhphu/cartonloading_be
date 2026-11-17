@@ -17,7 +17,7 @@ import org.bsl.cartonloading.common.exception.WorkflowNotFoundException;
 import org.bsl.cartonloading.common.exception.WorkflowValidationException;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
 import org.bsl.cartonloading.buyers.es.model.PackingListLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.repository.PackingAllocationLineRepository;
 import org.bsl.cartonloading.buyers.es.repository.PackingListLineRepository;
 import org.bsl.cartonloading.common.importing.ExcelImportSupport;
@@ -75,7 +75,7 @@ public class PackingListLineService {
             int page,
             int pageSize
     ) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         String keywordKey = key(keyword);
         String poKey = key(poNumber);
         String articleKey = key(articleNumber);
@@ -100,13 +100,13 @@ public class PackingListLineService {
     }
 
     public PackingListLine get(String buyerCode, String orderId, String lineId) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         return repository.findByIdAndOrderIdAndBuyerCode(lineId, order.getId(), order.getBuyerCode())
                 .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.PACKING_LIST_ROW_NOT_FOUND));
     }
 
     public PackingListLine create(String buyerCode, String orderId, PackingListLineRequest request) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         validate(request);
         boolean refreshPlan = cartonLoadingService.hasGeneratedPlan(order.getBuyerCode(), order.getId());
         if (refreshPlan) cartonLoadingService.assertGeneratedPlanEditable(order.getBuyerCode(), order.getId());
@@ -137,7 +137,7 @@ public class PackingListLineService {
     }
 
     public PackingListGenerationResult generateFromMaster(String buyerCode, String orderId, boolean replace) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         boolean refreshPlan = cartonLoadingService.hasGeneratedPlan(order.getBuyerCode(), order.getId());
         if (refreshPlan) cartonLoadingService.assertGeneratedPlanEditable(order.getBuyerCode(), order.getId());
         List<PackingAllocationLine> masterLines = masterRepository.findByOrderIdAndBuyerCode(order.getId(), order.getBuyerCode()).stream()
@@ -199,7 +199,7 @@ public class PackingListLineService {
     }
 
     public SpreadsheetImportResult upload(String buyerCode, String orderId, MultipartFile file, ImportMode mode) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         if (cartonLoadingService.hasGeneratedPlan(buyerCode, orderId)) {
             throw new WorkflowValidationException(AppMessages.BULK_IMPORT_LOCKED_AFTER_CARTON_MASTER);
         }
@@ -457,7 +457,7 @@ public class PackingListLineService {
         return !a.equalsIgnoreCase(b);
     }
 
-    private PackingListLine newLine(PackingOrder order, PackingListLineRequest request, int lineNo) {
+    private PackingListLine newLine(OrderDocument order, PackingListLineRequest request, int lineNo) {
         PackingListLine entity = new PackingListLine();
         entity.setBuyerCode(order.getBuyerCode());
         entity.setOrderId(order.getId());
@@ -502,7 +502,7 @@ public class PackingListLineService {
         requiredNumber(request.totalPcs(), AppMessages.TOTAL_PCS_REQUIRED);
     }
 
-    private int nextLineNo(PackingOrder order) {
+    private int nextLineNo(OrderDocument order) {
         return repository.findByOrderIdAndBuyerCode(order.getId(), order.getBuyerCode()).stream()
                 .map(PackingListLine::getLineNo)
                 .filter(value -> value != null)

@@ -1,11 +1,7 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
 import org.bsl.cartonloading.model.CartonProcessingHistory;
-import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
-import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
-import org.bsl.cartonloading.buyers.es.model.PackingListLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
-import org.bsl.cartonloading.buyers.es.model.Shipment;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.lululemon.model.*;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.service.AuditLogService;
@@ -43,6 +39,13 @@ public class LululemonTestCleanupService {
         return enabled && !environment.acceptsProfiles(Profiles.of("prod", "production"));
     }
 
+    /** Read-only availability response for the existing ADMIN status endpoint. */
+    public Map<String, Boolean> status(String buyer, String orderId) {
+        if (!isTestCleanupEnabled()) return Map.of("enabled", false);
+        assertAvailable(buyer, orderId);
+        return Map.of("enabled", true);
+    }
+
     public void assertAvailable(String buyer, String orderId) {
         if (!isTestCleanupEnabled()) {
             throw new IllegalStateException("TEST cleanup is disabled. Use an isolated test database.");
@@ -50,7 +53,7 @@ public class LululemonTestCleanupService {
         if (!AppConstants.Buyer.LULULEMON.equalsIgnoreCase(buyer)) {
             throw new IllegalArgumentException("TEST cleanup is limited to LULULEMON.");
         }
-        PackingOrder entity = template.findById(orderId, PackingOrder.class);
+        OrderDocument entity = template.findById(orderId, OrderDocument.class);
         if (entity == null || !Objects.equals(entity.getBuyerCode(), AppConstants.Buyer.LULULEMON)) {
             throw new IllegalArgumentException("Lululemon Order not found.");
         }
@@ -59,7 +62,7 @@ public class LululemonTestCleanupService {
     /** Count exactly what will be removed. Read-only; independent of order name/user input. */
     public Map<String, Object> preview(String buyer, String orderId) {
         assertAvailable(buyer, orderId);
-        PackingOrder entity = template.findById(orderId, PackingOrder.class);
+        OrderDocument entity = template.findById(orderId, OrderDocument.class);
         Map<String, Long> counts = new LinkedHashMap<>();
         for (Target target : targets(orderId)) {
             counts.put(target.label(), template.count(target.query(), target.collection()));
@@ -76,7 +79,7 @@ public class LululemonTestCleanupService {
      */
     public synchronized Map<String, Object> purge(String buyer, String orderId, String confirmation) {
         assertAvailable(buyer, orderId);
-        PackingOrder entity = template.findById(orderId, PackingOrder.class);
+        OrderDocument entity = template.findById(orderId, OrderDocument.class);
         String required = "DELETE " + entity.getOrderName();
         if (!required.equals(confirmation)) {
             throw new IllegalArgumentException("Type '" + required + "' to confirm deletion of this Order and all related data.");
@@ -98,7 +101,7 @@ public class LululemonTestCleanupService {
         // Parent Order last, so a partial error retains the Order for an idempotent retry.
         Query orderQuery = Query.query(Criteria.where("_id").is(orderId)
                 .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
-        counts.put("Order", template.remove(orderQuery, PackingOrder.class).getDeletedCount());
+        counts.put("Order", template.remove(orderQuery, OrderDocument.class).getDeletedCount());
         audit.logForFactory(RequestActor.current(), "TEST_PURGE_FINISHED", "LULULEMON_ORDER", orderId,
                 "Test-only cleanup of Order " + entity.getOrderName() + ": " + counts,
                 AppConstants.Buyer.LULULEMON, entity.getFactoryCode());
@@ -126,10 +129,10 @@ public class LululemonTestCleanupService {
         add(targets, "Carton items", CartonItem.class, ownerQuery(orderId));
         add(targets, "Cartons", Carton.class, ownerQuery(orderId));
         add(targets, "Purchase Orders", PurchaseOrder.class, ownerQuery(orderId));
-        add(targets, "Shipments", Shipment.class, ownerQuery(orderId));
-        add(targets, "Packing list lines", PackingListLine.class, ownerQuery(orderId));
-        add(targets, "Packing allocation lines", PackingAllocationLine.class, ownerQuery(orderId));
-        add(targets, "Carton operations", CartonScanTransaction.class, ownerQuery(orderId));
+        targets.add(new Target("Shipments", AppConstants.Collection.SHIPMENTS, ownerQuery(orderId)));
+        targets.add(new Target("Packing list lines", AppConstants.Collection.PACKING_LIST_LINES, ownerQuery(orderId)));
+        targets.add(new Target("Packing allocation lines", AppConstants.Collection.PACKING_ALLOCATION_LINES, ownerQuery(orderId)));
+        targets.add(new Target("Carton operations", AppConstants.Collection.CARTON_OPERATIONS, ownerQuery(orderId)));
         targets.add(new Target("PO identity registry", AppConstants.Collection.PO_IDENTITY_REGISTRY, ownerQuery(orderId)));
         return targets;
     }

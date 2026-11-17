@@ -282,6 +282,15 @@ public class OrderManagementService {
             String factory, java.time.LocalDate shippingDate, String poNumber, String factoryFilter, String style,
             String sku, String destination, String status, java.time.LocalDate exFtyDate,
             String inspectionStatus, int page, int size) {
+        return listShippingSchedulePos(buyer, orderId, factory, shippingDate, poNumber, factoryFilter,
+                style, sku, destination, status, exFtyDate, inspectionStatus, null, page, size);
+    }
+
+    /** Optional additional QC PO id filter; applied BEFORE pagination. */
+    public Page<PoManagementRow> listShippingSchedulePos(String buyer, String orderId,
+            String factory, java.time.LocalDate shippingDate, String poNumber, String factoryFilter, String style,
+            String sku, String destination, String status, java.time.LocalDate exFtyDate,
+            String inspectionStatus, java.util.Set<String> allowedPoIds, int page, int size) {
         String code = requiredBuyer(buyer);
         if (!AppConstants.Buyer.LULULEMON.equals(code)) {
             throw new IllegalArgumentException("Shipping Schedule PO table is available for LULULEMON only.");
@@ -297,6 +306,7 @@ public class OrderManagementService {
                 ? Map.of() : loadInspectionCounts(orderId, code);
         List<PurchaseOrder> matched = purchaseOrders.findByOrderIdAndBuyerCodeOrderByPoNumberAsc(orderId, code).stream()
                 .filter(po -> factoryScope.matches(activeFactory, po.getFactoryCode()))
+                .filter(po -> allowedPoIds == null || allowedPoIds.contains(po.getId()))
                 .filter(po -> (po.getShippingDates() != null && po.getShippingDates().contains(shippingDate))
                         || shippingDate.equals(po.getPlannedShippingDate()))
                 .filter(po -> matches(po.getPoNumber(), poNumber))

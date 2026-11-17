@@ -2,7 +2,7 @@ package org.bsl.cartonloading.controller;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
 import org.bsl.cartonloading.buyers.lululemon.service.CartonProcessingService;
-import org.bsl.cartonloading.service.facade.CartonProcessingFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.CartonProcessingFacade;
 
 import org.bsl.cartonloading.buyers.lululemon.dto.CartonProcessingIdentityRequest;
 import org.bsl.cartonloading.buyers.lululemon.dto.CartonProcessingWeightRequest;

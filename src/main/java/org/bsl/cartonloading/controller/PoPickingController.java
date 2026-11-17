@@ -1,5 +1,5 @@
 package org.bsl.cartonloading.controller;
-import org.bsl.cartonloading.service.facade.PoPickingFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.PoPickingFacade;
 
 import java.util.List;
 import org.bsl.cartonloading.buyers.lululemon.model.PoPickEvent;

@@ -1,6 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.lululemon.model.RfidPdaCapture;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.service.RequestActor;
@@ -87,8 +87,8 @@ public class LululemonOrderCascadeDeleteService {
         if (!RequestActor.isAdmin()) {
             throw new AccessDeniedException("Only Admin can permanently delete an Order containing operational data.");
         }
-        PackingOrder order = mongo.findOne(Query.query(Criteria.where("_id").is(orderId)
-                .and("buyerCode").is(AppConstants.Buyer.LULULEMON)), PackingOrder.class);
+        OrderDocument order = mongo.findOne(Query.query(Criteria.where("_id").is(orderId)
+                .and("buyerCode").is(AppConstants.Buyer.LULULEMON)), OrderDocument.class);
         if (order == null) throw new IllegalArgumentException("LULULEMON Order not found.");
         String required = AppConstants.OrderDeletion.CONFIRM_PREFIX + order.getOrderName();
         if (!required.equals(confirmation) || !order.getOrderName().equals(expectedName)) {
@@ -106,7 +106,7 @@ public class LululemonOrderCascadeDeleteService {
         // A persisted deletion fence prevents new Workflow imports from beginning.
         mongo.updateFirst(Query.query(Criteria.where("_id").is(orderId)
                 .and("buyerCode").is(AppConstants.Buyer.LULULEMON)),
-                new Update().set("deletionState", AppConstants.OrderDeletion.DELETING), PackingOrder.class);
+                new Update().set("deletionState", AppConstants.OrderDeletion.DELETING), OrderDocument.class);
         // Recheck after placing the fence. A competing importer may have reserved
         // an identity while the Order was still available.
         registry.assertNoReservedForOrder(orderId);
@@ -119,6 +119,6 @@ public class LululemonOrderCascadeDeleteService {
         registry.releaseForDeletedOrder(orderId);
         // Parent last: a partial failure leaves an Order to retry deletion against.
         mongo.remove(Query.query(Criteria.where("_id").is(orderId)
-                .and("buyerCode").is(AppConstants.Buyer.LULULEMON)), PackingOrder.class);
+                .and("buyerCode").is(AppConstants.Buyer.LULULEMON)), OrderDocument.class);
     }
 }

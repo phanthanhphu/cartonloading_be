@@ -1,5 +1,5 @@
 package org.bsl.cartonloading.controller;
-import org.bsl.cartonloading.service.facade.CartonLoadingFacade;
+import org.bsl.cartonloading.buyers.es.service.facade.CartonLoadingFacade;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.bsl.cartonloading.common.constants.AppConstants;

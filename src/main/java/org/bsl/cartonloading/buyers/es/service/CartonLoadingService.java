@@ -23,7 +23,7 @@ import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.FactoryBarcode;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
 import org.bsl.cartonloading.buyers.es.model.PackingListLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.model.ScaleStation;
 import org.bsl.cartonloading.buyers.es.repository.CartonScanTransactionRepository;
 import org.bsl.cartonloading.buyers.es.repository.PackingAllocationLineRepository;
@@ -103,7 +103,7 @@ public class CartonLoadingService {
             boolean replace
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         List<PackingAllocationLine> masterLines = masterRepository
                 .findByOrderIdAndBuyerCode(order.getId(), buyer)
                 .stream()
@@ -229,7 +229,7 @@ public class CartonLoadingService {
      */
     public boolean hasGeneratedPlan(String buyerCode, String orderId) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         return transactionRepository.countByOrderIdAndBuyerCode(order.getId(), buyer) > 0;
     }
 
@@ -240,7 +240,7 @@ public class CartonLoadingService {
      */
     public void assertGeneratedPlanEditable(String buyerCode, String orderId) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         List<CartonScanTransaction> existing = transactionRepository.findByOrderIdAndBuyerCode(order.getId(), buyer);
         if (existing.stream().anyMatch(this::hasOperationalData)) {
             throw new IllegalArgumentException(
@@ -255,7 +255,7 @@ public class CartonLoadingService {
      */
     public CartonPlanGenerationResult refreshGeneratedPlanIfPresent(String buyerCode, String orderId) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         if (transactionRepository.countByOrderIdAndBuyerCode(order.getId(), buyer) <= 0) {
             return new CartonPlanGenerationResult(false, 0, 0, 0,
                     AppMessages.CARTON_MASTER_NOT_GENERATED_NO_REFRESH);
@@ -273,7 +273,7 @@ public class CartonLoadingService {
             int pageSize
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         CartonScanStatus statusFilter = parseStatus(status);
         int safePage = Math.max(0, page);
         int safeSize = Math.max(1, Math.min(pageSize, 200));
@@ -308,7 +308,7 @@ public class CartonLoadingService {
             String masterLineId
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         String itemId = required(masterLineId, AppMessages.WSP_ITEM_REQUIRED);
         masterRepository.findById(itemId)
                 .filter(item -> order.getId().equals(item.getOrderId()) && buyer.equals(item.getBuyerCode()))
@@ -331,7 +331,7 @@ public class CartonLoadingService {
             int pageSize
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         int safePage = Math.max(0, page);
         int safeSize = Math.max(10, Math.min(pageSize, 100));
         long offset = (long) safePage * safeSize;
@@ -401,7 +401,7 @@ public class CartonLoadingService {
             int pageSize
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         int safePage = Math.max(0, page);
         int safeSize = Math.max(10, Math.min(pageSize, 100));
 
@@ -508,7 +508,7 @@ public class CartonLoadingService {
             FactoryBarcodeAssignRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         if (request == null) throw new IllegalArgumentException(AppMessages.ASSIGNMENT_REQUEST_REQUIRED);
         String barcodeValue = required(request.factoryBarcode(), AppMessages.FACTORY_BARCODE_REQUIRED);
         String cartonId = required(request.cartonId(), AppMessages.CARTON_REQUIRED);
@@ -582,7 +582,7 @@ public class CartonLoadingService {
             String cartonId
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         CartonScanTransaction carton = transactionRepository
                 .findByIdAndOrderIdAndBuyerCode(required(cartonId, AppMessages.CARTON_REQUIRED), order.getId(), buyer)
                 .orElseThrow(() -> new IllegalArgumentException(AppMessages.CARTON_MASTER_NOT_FOUND_SELECTED_ORDER));
@@ -632,7 +632,7 @@ public class CartonLoadingService {
             CartonWeightResetRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         String reason = required(request == null ? null : request.reason(), AppMessages.CORRECTION_REASON_REQUIRED);
         CartonScanTransaction carton = transactionRepository
                 .findByIdAndOrderIdAndBuyerCode(required(cartonId, AppMessages.CARTON_REQUIRED), order.getId(), buyer)
@@ -714,7 +714,7 @@ public class CartonLoadingService {
             FactoryBarcodeScanRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         if (request == null) throw new IllegalArgumentException(AppMessages.FACTORY_BARCODE_SCAN_REQUEST_REQUIRED);
         boolean manualMode = Boolean.TRUE.equals(request.manualMode()) || blank(request.stationCode());
         ScaleStation station = manualMode ? null : stationService.requireActive(request.stationCode());
@@ -816,7 +816,7 @@ public class CartonLoadingService {
             CartonItemLookupRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         String barcode = required(request.barcode(), AppMessages.BARCODE_REQUIRED);
         String normalized = normalizeBarcode(barcode);
         ParsedQr parsed = parseQr(barcode);
@@ -856,7 +856,7 @@ public class CartonLoadingService {
             ZebraScanRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         boolean manualMode = Boolean.TRUE.equals(request.manualMode()) || blank(request.stationCode());
         ScaleStation station = manualMode ? null : stationService.requireActive(request.stationCode());
         String stationCode = station == null ? null : station.getStationCode();
@@ -987,7 +987,7 @@ public class CartonLoadingService {
             CartonManualCompleteRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         ScaleStation station = stationService.requireActive(request.stationCode());
         String stationCode = station.getStationCode();
 
@@ -1032,7 +1032,7 @@ public class CartonLoadingService {
             CartonPlanScanRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         ScaleStation station = stationService.requireActive(request.stationCode());
         String stationCode = station.getStationCode();
 
@@ -1076,7 +1076,7 @@ public class CartonLoadingService {
     /* Backward-compatible barcode lookup based on the generated Packing List. */
     public CartonLookupResponse lookup(String buyerCode, String orderId, CartonLookupRequest request) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         stationService.requireActive(request.stationCode());
         String barcode = required(request.barcode(), AppMessages.BARCODE_REQUIRED);
         String normalized = normalizeBarcode(barcode);
@@ -1102,7 +1102,7 @@ public class CartonLoadingService {
             CartonStartRequest request
     ) {
         String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderService.getEntity(buyer, orderId);
+        OrderDocument order = orderService.getEntity(buyer, orderId);
         ScaleStation station = stationService.requireActive(request.stationCode());
         String stationCode = station.getStationCode();
 

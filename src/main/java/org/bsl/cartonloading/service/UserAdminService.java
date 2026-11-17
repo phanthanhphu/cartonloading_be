@@ -295,9 +295,9 @@ public class UserAdminService {
             user.setBuyerAccessPermissions(request.buyerAccessPermissions());
         }
         user.removeUnassignedBuyerAccessPermissions();
-        if (!user.isAdminRole() && user.canAccessBuyer(AppConstants.Buyer.LULULEMON)
-                && !user.canLululemonRead())
-            throw new IllegalArgumentException("Select at least one LULULEMON Access Permission");
+        // An explicitly empty LULULEMON grant is valid for "No Access".
+        // It grants no operational or report privileges; a report-only account
+        // with its last grant revoked can no longer log into that Buyer.
         if (request.buyerTypePermissions() != null) {
             user.setBuyerTypePermissions(request.buyerTypePermissions());
         } else if (creating) {
@@ -313,8 +313,17 @@ public class UserAdminService {
         if (request.weighingFactoryPermissions() != null) user.setWeighingFactoryPermissions(request.weighingFactoryPermissions());
 
         if (!user.isAdminRole() && user.canAccessBuyer(AppConstants.Buyer.LULULEMON)) {
-            if (user.getFactoryPermissions().isEmpty())
-                throw new IllegalArgumentException("Assign at least one active Factory to LULULEMON user");
+            if (user.getFactoryPermissions().isEmpty()) {
+                // Report-only accounts may use Option 1 without a Factory assignment.
+                // Option 2 without assignment has no visible report until an owner is assigned.
+                java.util.List<String> grants = user.getBuyerAccessPermissions()
+                        .getOrDefault(AppConstants.Buyer.LULULEMON, java.util.List.of());
+                boolean reportOnly = grants.stream().allMatch(code ->
+                        AppConstants.Permission.LULU_MANAGEMENT_REPORT_ALL.equals(code)
+                        || AppConstants.Permission.LULU_MANAGEMENT_REPORT_ASSIGNED.equals(code));
+                if (!reportOnly)
+                    throw new IllegalArgumentException("Assign at least one active Factory to LULULEMON user");
+            }
             for (String code : user.getFactoryPermissions()) factories.requireActive(AppConstants.Buyer.LULULEMON, code);
             for (String code : user.getWeighingFactoryPermissions()) {
                 factories.requireActive(AppConstants.Buyer.LULULEMON, code);

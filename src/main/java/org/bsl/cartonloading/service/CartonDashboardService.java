@@ -6,7 +6,7 @@ import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.es.enums.CartonScanStatus;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.PackingListLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.model.Shipment;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
@@ -62,7 +62,7 @@ public class CartonDashboardService {
     }
 
     private DashboardSummary.BuyerSummary buyerSummary(String buyer) {
-        long orders = mongo.count(Query.query(Criteria.where("buyerCode").is(buyer)), PackingOrder.class);
+        long orders = mongo.count(Query.query(Criteria.where("buyerCode").is(buyer)), OrderDocument.class);
         if (AppConstants.Buyer.LULULEMON.equals(buyer)) {
             List<PurchaseOrder> poRows = mongo.find(Query.query(Criteria.where("buyerCode").is(buyer)), PurchaseOrder.class).stream()
                     .filter(this::scoped)

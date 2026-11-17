@@ -5,7 +5,7 @@ import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.es.dto.barcode.FactoryBarcodeScanRequest;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.Shipment;
-import org.bsl.cartonloading.service.PackingShipmentFacade;
+import org.bsl.cartonloading.buyers.es.service.PackingShipmentFacade;
 import org.springframework.data.domain.Page;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;

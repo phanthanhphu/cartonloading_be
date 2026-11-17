@@ -2,7 +2,8 @@ package org.bsl.cartonloading.controller;
 import org.bsl.cartonloading.buyers.lululemon.dto.CartonHistoryFilters;
 import org.bsl.cartonloading.buyers.lululemon.dto.CartonHistoryRow;
 import org.bsl.cartonloading.buyers.lululemon.service.WorkflowService;
-import org.bsl.cartonloading.service.facade.WorkflowFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.WorkflowFacade;
+import org.bsl.cartonloading.buyers.lululemon.service.facade.WorkflowExcelFileFacade;
 
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.buyers.lululemon.dto.*;
@@ -22,9 +23,11 @@ import java.util.List;
 @RequestMapping(AppConstants.ApiPath.SSCC_WORKFLOW_ORDER)
 public class WorkflowController {
     private final WorkflowFacade service;
+    private final WorkflowExcelFileFacade excelFiles;
 
-    public WorkflowController(WorkflowFacade service) {
+    public WorkflowController(WorkflowFacade service, WorkflowExcelFileFacade excelFiles) {
         this.service = service;
+        this.excelFiles = excelFiles;
     }
 
     @PostMapping(value = "/all-bp/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -49,25 +52,16 @@ public class WorkflowController {
     @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     public org.springframework.http.ResponseEntity<byte[]> excelTemplate(@PathVariable String buyer, @PathVariable String orderId) {
         byte[] data = service.forBuyer(buyer, impl -> impl.downloadExcelTemplate(buyer, orderId));
-        return excelDownload(data, "Lululemon_PO_Import_Template.xlsx");
+        return excelFiles.forBuyer(buyer, impl -> impl.template(data));
     }
 
     @GetMapping("/excel-actions/export")
     @PreAuthorize(AppConstants.SecurityExpression.BUYER_ACCESS)
     public org.springframework.http.ResponseEntity<byte[]> exportExcel(@PathVariable String buyer, @PathVariable String orderId) {
         byte[] data = service.forBuyer(buyer, impl -> impl.exportActionExcel(buyer, orderId));
-        String timestamp = java.time.ZonedDateTime.now(java.time.ZoneId.of(AppConstants.Excel.EXPORT_ZONE))
-                .format(java.time.format.DateTimeFormatter.ofPattern(AppConstants.Excel.EXPORT_TIMESTAMP_FORMAT));
-        return excelDownload(data, AppConstants.Excel.LULULEMON_EXPORT_PREFIX + timestamp + ".xlsx");
+        return excelFiles.forBuyer(buyer, impl -> impl.export(data));
     }
 
-    private org.springframework.http.ResponseEntity<byte[]> excelDownload(byte[] data, String filename) {
-        return org.springframework.http.ResponseEntity.ok()
-                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
-                        org.springframework.http.ContentDisposition.attachment().filename(filename).build().toString())
-                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
-                .body(data);
-    }
 
     @PostMapping(value = "/excel-actions/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize(AppConstants.SecurityExpression.BUYER_MANAGE_SALES)

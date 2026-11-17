@@ -13,12 +13,13 @@ import org.bsl.cartonloading.buyers.es.enums.CartonScanStatus;
 import org.bsl.cartonloading.common.exception.WorkflowNotFoundException;
 import org.bsl.cartonloading.common.exception.WorkflowValidationException;
 import org.bsl.cartonloading.model.BuyerAccess;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.repository.CartonScanTransactionRepository;
 import org.bsl.cartonloading.buyers.es.repository.PackingAllocationLineRepository;
 import org.bsl.cartonloading.buyers.es.repository.PackingListLineRepository;
-import org.bsl.cartonloading.buyers.es.repository.PackingOrderRepository;
+import org.bsl.cartonloading.shared.orders.repository.BuyerOrderRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -34,20 +35,23 @@ import java.util.stream.Collectors;
 
 @Service
 public class PackingOrderService {
-    private final PackingOrderRepository orderRepository;
+    private final BuyerOrderRepository orderRepository;
+    private final BuyerOrderLookupService orderLookup;
     private final BuyerFactoryAccessService factoryAccess;
     private final PackingAllocationLineRepository masterLineRepository;
     private final PackingListLineRepository packingLineRepository;
     private final CartonScanTransactionRepository cartonTransactionRepository;
 
     public PackingOrderService(
-            PackingOrderRepository orderRepository,
+            BuyerOrderRepository orderRepository,
+            BuyerOrderLookupService orderLookup,
             BuyerFactoryAccessService factoryAccess,
             PackingAllocationLineRepository masterLineRepository,
             PackingListLineRepository packingLineRepository,
             CartonScanTransactionRepository cartonTransactionRepository
     ) {
         this.orderRepository = orderRepository;
+        this.orderLookup = orderLookup;
         this.factoryAccess = factoryAccess;
         this.masterLineRepository = masterLineRepository;
         this.packingLineRepository = packingLineRepository;
@@ -138,19 +142,8 @@ public class PackingOrderService {
         return response(getEntity(buyerCode, id));
     }
 
-    public PackingOrder getEntity(String buyerCode, String id) {
-        String buyer = requireBuyer(buyerCode);
-        PackingOrder order = orderRepository.findByIdAndBuyerCode(id, buyer)
-                .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.ORDER_NOT_FOUND));
-        if (AppConstants.Buyer.LULULEMON.equals(buyer)) {
-            if (order.getFactoryCode() == null || order.getFactoryCode().isBlank()) {
-                if (!factoryAccess.isUnrestricted())
-                    throw new org.springframework.security.access.AccessDeniedException("Order has no Factory. Ask Admin to classify it.");
-            } else if (!canReadFactory(order.getFactoryCode())) {
-                throw new org.springframework.security.access.AccessDeniedException("Order Factory access denied: " + order.getFactoryCode());
-            }
-        }
-        return order;
+    public OrderDocument getEntity(String buyerCode, String id) {
+        return orderLookup.getEntity(buyerCode, id);
     }
 
     /** A duplicate is defined within the same Buyer + Factory, ignoring case,
@@ -175,7 +168,7 @@ public class PackingOrderService {
                         && key.equals(orderNameKey(existing.getOrderName())));
     }
 
-    private void assertUniqueOrderName(PackingOrder entity, String buyer) {
+    private void assertUniqueOrderName(OrderDocument entity, String buyer) {
         if (!AppConstants.Buyer.LULULEMON.equals(buyer)) return;
         if (duplicateOrderName(buyer, entity.getFactoryCode(), entity.getOrderName(), entity.getId())) {
             throw new WorkflowValidationException("Order name already exists in Factory "
@@ -188,7 +181,7 @@ public class PackingOrderService {
         String buyer = requireBuyer(buyerCode);
         LocalDateTime now = LocalDateTime.now();
 
-        PackingOrder entity = new PackingOrder();
+        OrderDocument entity = new OrderDocument();
         entity.setBuyerCode(buyer);
         entity.setBuyerKey(buyer);
         apply(entity, request, buyer, true);
@@ -208,7 +201,7 @@ public class PackingOrderService {
     }
 
     public PackingOrderResponse update(String buyerCode, String id, PackingOrderRequest request) {
-        PackingOrder entity = getEntity(buyerCode, id);
+        OrderDocument entity = getEntity(buyerCode, id);
         entity.setBuyerKey(requireBuyer(buyerCode));
         apply(entity, request, requireBuyer(buyerCode), false);
         assignFactory(requireBuyer(buyerCode), entity, request);
@@ -225,7 +218,7 @@ public class PackingOrderService {
     }
 
     public void delete(String buyerCode, String id) {
-        PackingOrder entity = getEntity(buyerCode, id);
+        OrderDocument entity = getEntity(buyerCode, id);
         if (cartonTransactionRepository.countByOrderIdAndBuyerCode(entity.getId(), entity.getBuyerCode()) > 0) {
             throw new WorkflowValidationException(AppMessages.DELETE_ORDER_WITH_CARTONS_BLOCKED);
         }
@@ -235,7 +228,7 @@ public class PackingOrderService {
         orderRepository.delete(entity);
     }
 
-    public void touchFromMaster(PackingOrder entity) {
+    public void touchFromMaster(OrderDocument entity) {
         entity.setBuyerKey(entity.getBuyerCode());
         entity.setUpdatedBy(RequestActor.current());
         entity.setUpdatedAt(LocalDateTime.now());
@@ -251,7 +244,7 @@ public class PackingOrderService {
     /** Factory is mandatory on new LULULEMON Orders, immutable after it has been set.
      * Admin may explicitly classify legacy unassigned Orders; ES remains untouched.
      */
-    private void assignFactory(String buyer, PackingOrder entity, PackingOrderRequest request) {
+    private void assignFactory(String buyer, OrderDocument entity, PackingOrderRequest request) {
         if (!AppConstants.Buyer.LULULEMON.equals(buyer)) return;
         String requested = request.factoryCode() == null ? "" : request.factoryCode().trim().toUpperCase(Locale.ROOT);
         if (requested.isBlank()) throw new WorkflowValidationException("Select a Factory for this LULULEMON Order.");
@@ -264,7 +257,7 @@ public class PackingOrderService {
         entity.setFactoryCode(requested);
     }
 
-    private void apply(PackingOrder entity, PackingOrderRequest request, String buyer, boolean creating) {
+    private void apply(OrderDocument entity, PackingOrderRequest request, String buyer, boolean creating) {
         if (AppConstants.Buyer.LULULEMON.equals(buyer)) {
             // LULULEMON's start date is the date of creation (set by the server).
             // Editing does not change the original creation date or legacy end date.
@@ -292,7 +285,7 @@ public class PackingOrderService {
         entity.setProductionFacility(trimToNull(request.productionFacility()));
     }
 
-    private PackingOrderResponse response(PackingOrder entity) {
+    private PackingOrderResponse response(OrderDocument entity) {
         long masterLineCount = masterLineRepository.countByOrderIdAndBuyerCode(entity.getId(), entity.getBuyerCode());
         long packingLineCount = packingLineRepository.countByOrderIdAndBuyerCode(entity.getId(), entity.getBuyerCode());
         List<CartonScanTransaction> cartons = cartonTransactionRepository.findByOrderIdAndBuyerCode(
@@ -396,7 +389,7 @@ public class PackingOrderService {
                 || (order.endOrderDate() != null && order.endOrderDate().toString().contains(keywordKey));
     }
 
-    private LocalDate resolvedOrderDate(PackingOrder entity) {
+    private LocalDate resolvedOrderDate(OrderDocument entity) {
         if (entity.getOrderDate() != null) return entity.getOrderDate();
         return entity.getCreatedAt() == null ? null : entity.getCreatedAt().toLocalDate();
     }

@@ -4,7 +4,7 @@ import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.FactoryBarcode;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
 import org.bsl.cartonloading.buyers.es.model.PackingListLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.model.Shipment;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.junit.jupiter.api.Test;
@@ -15,7 +15,7 @@ class BuyerKeyBeforeConvertCallbackTest {
     private final BuyerKeyBeforeConvertCallback callback = new BuyerKeyBeforeConvertCallback();
 
     @Test void usesBuyerCodeForSharedOrder() {
-        PackingOrder row = new PackingOrder();
+        OrderDocument row = new OrderDocument();
         row.setBuyerCode("ES");
         callback.onBeforeConvert(row, AppConstants.Collection.ORDERS);
         assertEquals(AppConstants.Buyer.ENGELBERT_STRAUSS, row.getBuyerKey());
@@ -41,7 +41,7 @@ class BuyerKeyBeforeConvertCallbackTest {
     }
 
     @Test void cannotWriteBusinessDocumentWithoutBuyer() {
-        PackingOrder order = new PackingOrder();
+        OrderDocument order = new OrderDocument();
         assertThrows(IllegalArgumentException.class, () -> callback.onBeforeConvert(order, AppConstants.Collection.ORDERS));
     }
 

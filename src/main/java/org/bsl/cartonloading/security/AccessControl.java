@@ -61,6 +61,14 @@ public class AccessControl {
                 && user.canAccessBuyerType(session.buyer(), session.type())
                 && user.canLululemonReopenShippingSchedule()).orElse(false);
     }
+    public boolean canLululemonViewManagementReports() {
+        return lululemonSession() && currentUser().map(user -> user.isEnabled()
+                && user.canLululemonViewManagementReports()).orElse(false);
+    }
+    public boolean canLululemonExportManagementReports() {
+        return lululemonSession() && currentUser().map(user -> user.isEnabled()
+                && user.canLululemonExportManagementReports()).orElse(false);
+    }
     public boolean canReadBuyerData() {
         return currentUser().map(user -> user.isEnabled() && (lululemonSession()
                 ? user.canLululemonRead() : (user.canManageSales() || user.canAssignBarcode()

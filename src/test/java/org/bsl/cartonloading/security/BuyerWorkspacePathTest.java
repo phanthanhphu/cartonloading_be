@@ -14,6 +14,29 @@ class BuyerWorkspacePathTest {
         assertFalse(JwtAuthenticationFilter.matchesRequestWorkspace(request, "LULULEMON", "RFID"));
     }
     @Test
+    void adminBuyerIdPutDeleteAreNotMistakenForScopedBuyerRoutes() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRequestURI("/api/buyers/6afac8046cbd9146d8211c60");
+        request.setMethod("DELETE");
+        assertTrue(JwtAuthenticationFilter.matchesRequestWorkspace(request, "LULULEMON", "RFID"));
+        request.setMethod("PUT");
+        assertTrue(JwtAuthenticationFilter.matchesRequestWorkspace(request, "LULULEMON", "RFID"));
+        // Controller @PreAuthorize still requires ADMIN for these operations.
+        request.setMethod("GET");
+        assertFalse(JwtAuthenticationFilter.matchesRequestWorkspace(request, "LULULEMON", "RFID"));
+    }
+
+    @Test
+    void buyerScopedApisRemainBoundToLoginWorkspace() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setMethod("DELETE");
+        request.setRequestURI("/api/buyers/ENGELBERT_STRAUSS/orders/123");
+        assertFalse(JwtAuthenticationFilter.matchesRequestWorkspace(request, "LULULEMON", "RFID"));
+        request.setRequestURI("/api/buyers/LULULEMON/lululemon/management-reports/export");
+        assertTrue(JwtAuthenticationFilter.matchesRequestWorkspace(request, "LULULEMON", "RFID"));
+    }
+
+    @Test
     void queryBuyerCannotOverrideJwtSession() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setRequestURI("/api/order-management/orders");

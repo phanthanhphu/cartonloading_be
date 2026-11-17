@@ -16,19 +16,16 @@ import java.util.List;
 @RequestMapping("/api/factories")
 public class FactoryController {
     private final FactoryCatalogService service;
-    private final AccessControl accessControl;
-    private final BuyerFactoryAccessService access;
-    public FactoryController(FactoryCatalogService service, AccessControl accessControl, BuyerFactoryAccessService access) { this.service = service; this.accessControl = accessControl; this.access = access; }
+    private final org.bsl.cartonloading.service.FactoryAccessQueryService query;
+    public FactoryController(FactoryCatalogService service, org.bsl.cartonloading.service.FactoryAccessQueryService query) {
+        this.service = service;
+        this.query = query;
+    }
     @GetMapping
     @PreAuthorize("isAuthenticated()")
     public List<Factory> list(@RequestParam(defaultValue = AppConstants.Buyer.LULULEMON) String buyerKey,
                               @RequestParam(defaultValue = "false") boolean includeInactive) {
-        // Only Admin may inspect inactive factories.
-        if (!accessControl.isAdmin() && !accessControl.canAccessBuyer(buyerKey)) throw new AccessDeniedException("Buyer access denied");
-        if (accessControl.isAdmin()) return service.list(buyerKey, includeInactive);
-        return service.list(buyerKey, false).stream()
-                .filter(factory -> access.canAccessAssignedFactory(factory.getCode())
-                        || (access.currentUser().canLululemonScanWeight() && access.canAccessWeighingFactory(factory.getCode()))).toList();
+        return query.list(buyerKey, includeInactive);
     }
     @PostMapping
     @PreAuthorize("@accessControl.isAdmin()")
@@ -36,4 +33,8 @@ public class FactoryController {
     @PutMapping("/{id}")
     @PreAuthorize("@accessControl.isAdmin()")
     public Factory update(@PathVariable String id, @Valid @RequestBody FactoryRequest request) { return service.update(id, request); }
+    @DeleteMapping("/{id}")
+    @PreAuthorize("@accessControl.isAdmin()")
+    @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable String id) { service.delete(id); }
 }

@@ -2,6 +2,7 @@ package org.bsl.cartonloading.controller;
 
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.buyers.core.BuyerWorkflowRegistry;
+import org.bsl.cartonloading.buyers.core.BuyerWorkspaceFactoryPolicies;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.model.Buyer;
 import org.bsl.cartonloading.model.Factory;
@@ -31,16 +32,16 @@ public class AuthController {
     private final PasswordEncoder passwordEncoder;
     private final BuyerService buyerService;
     private final BuyerWorkflowRegistry workflowRegistry;
-    private final FactoryCatalogService factoryCatalog;
+    private final BuyerWorkspaceFactoryPolicies factoryPolicies;
     private final AuditLogService audit;
 
-    public AuthController(UserService userService, JwtUtil jwtUtil, PasswordEncoder passwordEncoder, BuyerService buyerService, BuyerWorkflowRegistry workflowRegistry, FactoryCatalogService factoryCatalog, AuditLogService audit) {
+    public AuthController(UserService userService, JwtUtil jwtUtil, PasswordEncoder passwordEncoder, BuyerService buyerService, BuyerWorkflowRegistry workflowRegistry, BuyerWorkspaceFactoryPolicies factoryPolicies, AuditLogService audit) {
         this.userService = userService;
         this.jwtUtil = jwtUtil;
         this.passwordEncoder = passwordEncoder;
         this.buyerService = buyerService;
         this.workflowRegistry = workflowRegistry;
-        this.factoryCatalog = factoryCatalog;
+        this.factoryPolicies = factoryPolicies;
         this.audit = audit;
     }
 
@@ -136,14 +137,10 @@ public class AuthController {
         if (authorized == null || !authorized.supportedTypes().contains(selectedType))
             return ResponseEntity.status(403).body(Map.of("message", "Buyer / Type is not approved for this account"));
 
-        if (AppConstants.Buyer.LULULEMON.equals(selectedBuyer)) {
-            if (!selectedFactory.isEmpty() && !authorized.factories().contains(selectedFactory))
-                return ResponseEntity.status(403).body(Map.of("message", "Factory is inactive or not assigned"));
-            if (!authorized.factories().isEmpty() && selectedFactory.isEmpty())
-                return ResponseEntity.badRequest().body(Map.of("message", "Please select an active Factory"));
-        } else if (!selectedFactory.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Factory catalog is not available for this Buyer"));
-        }
+        // Factory validation is Buyer-owned; controllers never hardcode a Buyer-specific policy.
+        var factoryIssue = factoryPolicies.validateSelection(selectedBuyer, selectedFactory, authorized.factories());
+        if (factoryIssue != null)
+            return ResponseEntity.status(factoryIssue.status()).body(Map.of("message", factoryIssue.message()));
 
         String token = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getTokenVersion(),
                 user.getAccessPermissions(), user.getBuyerPermissions(), selectedBuyer, selectedType);
@@ -181,12 +178,7 @@ public class AuthController {
                                     && workflowRegistry.hasImplementedWorkflow(buyerCode, type))
                             .toList();
                     if (types.isEmpty()) return null;
-                    List<String> factories = AppConstants.Buyer.LULULEMON.equals(buyerCode)
-                            ? factoryCatalog.list(buyerCode, false).stream()
-                                .map(Factory::getCode)
-                                .filter(user::canAccessFactory)
-                                .toList()
-                            : List.of();
+                    List<String> factories = factoryPolicies.authorizedFactories(buyerCode, user);
                     return new ContextOption(buyerCode, buyer.getBuyerName(), buyer.getSlug(),
                             types, factories);
                 })

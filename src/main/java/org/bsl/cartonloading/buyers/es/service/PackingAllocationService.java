@@ -16,7 +16,7 @@ import org.bsl.cartonloading.common.exception.WorkflowNotFoundException;
 import org.bsl.cartonloading.common.exception.WorkflowValidationException;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.buyers.es.model.PackingAllocationLine;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.repository.PackingAllocationLineRepository;
 import org.bsl.cartonloading.common.importing.ExcelImportSupport;
 import org.bsl.cartonloading.common.importing.TextNormalizer;
@@ -76,7 +76,7 @@ public class PackingAllocationService {
             int page,
             int pageSize
     ) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         String keywordKey = key(keyword);
         String poKey = key(poNumber);
         String articleKey = key(articleNumber);
@@ -107,13 +107,13 @@ public class PackingAllocationService {
     }
 
     public PackingAllocationLine get(String buyerCode, String orderId, String lineId) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         return lineRepository.findByIdAndOrderIdAndBuyerCode(lineId, order.getId(), order.getBuyerCode())
                 .orElseThrow(() -> new WorkflowNotFoundException(AppMessages.PACKING_ALLOCATION_ROW_NOT_FOUND));
     }
 
     public PackingAllocationLine create(String buyerCode, String orderId, PackingAllocationRequest request) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         validateBusinessRequired(request);
         PackingAllocationLine entity = new PackingAllocationLine();
         entity.setBuyerCode(order.getBuyerCode());
@@ -153,7 +153,7 @@ public class PackingAllocationService {
     }
 
     public void delete(String buyerCode, String orderId, String lineId) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         if (cartonLoadingService.hasGeneratedPlan(buyerCode, orderId)) {
             throw new WorkflowValidationException(AppMessages.DELETE_ORDER_ITEMS_AFTER_CARTON_MASTER_BLOCKED);
         }
@@ -167,7 +167,7 @@ public class PackingAllocationService {
             MultipartFile file,
             ImportMode mode
     ) {
-        PackingOrder order = orderService.getEntity(buyerCode, orderId);
+        OrderDocument order = orderService.getEntity(buyerCode, orderId);
         ImportMode effectiveMode = mode == null ? ImportMode.CREATE_ONLY : mode;
         if (cartonLoadingService.hasGeneratedPlan(buyerCode, orderId)) {
             throw new WorkflowValidationException(AppMessages.BULK_IMPORT_LOCKED_AFTER_CARTON_MASTER);
@@ -298,7 +298,7 @@ public class PackingAllocationService {
         return result;
     }
 
-    private void applyUpsert(PackingOrder order, List<RowCandidate> candidates, SpreadsheetImportResult result) {
+    private void applyUpsert(OrderDocument order, List<RowCandidate> candidates, SpreadsheetImportResult result) {
         Map<String, PackingAllocationLine> existing = new LinkedHashMap<>();
         for (PackingAllocationLine line : lineRepository.findByOrderIdAndBuyerCode(order.getId(), order.getBuyerCode())) {
             existing.putIfAbsent(identityKey(line), line);
@@ -323,7 +323,7 @@ public class PackingAllocationService {
         }
     }
 
-    private PackingAllocationLine newLine(PackingOrder order, PackingAllocationRequest request, int lineNo) {
+    private PackingAllocationLine newLine(OrderDocument order, PackingAllocationRequest request, int lineNo) {
         PackingAllocationLine entity = new PackingAllocationLine();
         entity.setBuyerCode(order.getBuyerCode());
         entity.setOrderId(order.getId());
@@ -523,7 +523,7 @@ public class PackingAllocationService {
         entity.setCbmCtn(request.cbmCtn());
     }
 
-    private int nextLineNo(PackingOrder order) {
+    private int nextLineNo(OrderDocument order) {
         return lineRepository.findByOrderIdAndBuyerCode(order.getId(), order.getBuyerCode()).stream()
                 .map(PackingAllocationLine::getLineNo)
                 .filter(value -> value != null)

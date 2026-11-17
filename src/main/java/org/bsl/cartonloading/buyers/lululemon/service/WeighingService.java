@@ -3,8 +3,8 @@ package org.bsl.cartonloading.buyers.lululemon.service;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.common.constants.AppMessages;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.buyers.lululemon.dto.*;
 import org.bsl.cartonloading.buyers.lululemon.model.*;
 import org.bsl.cartonloading.buyers.lululemon.repository.*;
@@ -32,7 +32,7 @@ public class WeighingService {
     private final WeighingResultRepository weightEventRepository;
     private final RfidScanSessionRepository rfidSessionRepository;
     private final ShippingScheduleRepository shippingScheduleRepository;
-    private final PackingOrderService orderService;
+    private final BuyerOrderLookupService orderService;
     private final BuyerFactoryAccessService factoryAccess;
     private final AuditLogService auditLogService;
     private final AppSocketPublisher socketPublisher;
@@ -45,7 +45,7 @@ public class WeighingService {
             WeighingResultRepository weightEventRepository,
             RfidScanSessionRepository rfidSessionRepository,
             ShippingScheduleRepository shippingScheduleRepository,
-            PackingOrderService orderService,
+            BuyerOrderLookupService orderService,
             BuyerFactoryAccessService factoryAccess,
             AuditLogService auditLogService,
             AppSocketPublisher socketPublisher,
@@ -163,7 +163,7 @@ public class WeighingService {
         requireLululemonBuyer(buyerCode);
         String activeFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         List<CartonWeightAssignmentRow> rows = new ArrayList<>();
-        Map<String, PackingOrder> orderCache = new HashMap<>();
+        Map<String, OrderDocument> orderCache = new HashMap<>();
         Map<String, PurchaseOrder> poCache = new HashMap<>();
 
         for (WeighingOrder weighingOrder : weighingOrderRepository.findByBuyerCodeOrderByCreatedAtDesc(AppConstants.Buyer.LULULEMON)) {
@@ -181,7 +181,7 @@ public class WeighingService {
                     || ShippingScheduleService.WEIGHING.equals(schedule.getStatus())
                     || ShippingScheduleService.COMPLETED.equals(schedule.getStatus()))) continue;
 
-            PackingOrder packingOrder;
+            OrderDocument packingOrder;
             try {
                 packingOrder = orderCache.computeIfAbsent(weighingOrder.getOrderId(), id -> orderService.getEntity(AppConstants.Buyer.LULULEMON, id));
             } catch (RuntimeException ex) {
@@ -286,7 +286,7 @@ public class WeighingService {
         PurchaseOrder po = requirePo(carton.getOrderId(), carton.getPoId());
         WeightProfile profile = derivedWeightProfile(po);
         BigDecimal expected = expectedWeight(carton, profile);
-        PackingOrder packingOrder = orderService.getEntity(AppConstants.Buyer.LULULEMON, carton.getOrderId());
+        OrderDocument packingOrder = orderService.getEntity(AppConstants.Buyer.LULULEMON, carton.getOrderId());
         String message = clean(carton.getWeightStatus()) == null
                 ? "SSCC-18 found in Shipping List assigned to Carton Weight."
                 : "SSCC-18 found. Current weight status: " + normalizeWeightStatus(carton.getWeightStatus()) + ".";
@@ -326,7 +326,7 @@ public class WeighingService {
         requireLululemonBuyer(buyerCode);
         String activeFactory = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         Map<String, ShippingSchedule> scheduleCache = new HashMap<>();
-        Map<String, PackingOrder> orderCache = new HashMap<>();
+        Map<String, OrderDocument> orderCache = new HashMap<>();
         List<CartonWeightHistoryRow> rows = new ArrayList<>();
         for (WeighingResult result : weightEventRepository.findByBuyerCodeOrderByCreatedAtDesc(AppConstants.Buyer.LULULEMON)) {
             String scheduleId = clean(result.getShippingScheduleId());
@@ -337,7 +337,7 @@ public class WeighingService {
                 Carton carton = cartonRepository.findById(result.getCartonId()).orElse(null);
                 if (carton == null || !selectedFactoryScope.matches(activeFactory, carton.getFactoryCode())
                         || !factoryAccess.canAccessAssignedFactory(carton.getFactoryCode())) continue;
-                PackingOrder directOrder;
+                OrderDocument directOrder;
                 try {
                     directOrder = orderCache.computeIfAbsent(result.getOrderId(), id ->
                             orderService.getEntity(AppConstants.Buyer.LULULEMON, id));
@@ -353,7 +353,7 @@ public class WeighingService {
                     .orElse(null));
             if (schedule == null || !selectedFactoryScope.matches(activeFactory, schedule.getFactoryCode())
                     || !factoryAccess.canAccessWeighingFactory(schedule.getFactoryCode())) continue;
-            PackingOrder order;
+            OrderDocument order;
             try {
                 order = orderCache.computeIfAbsent(result.getOrderId(), id -> orderService.getEntity(AppConstants.Buyer.LULULEMON, id));
             } catch (RuntimeException ex) {
@@ -628,7 +628,7 @@ public class WeighingService {
         PurchaseOrder po = requirePo(orderId, carton.getPoId());
         WeightProfile profile = derivedWeightProfile(po);
         BigDecimal expected = expectedWeight(carton, profile);
-        PackingOrder packingOrder = orderService.getEntity(AppConstants.Buyer.LULULEMON, orderId);
+        OrderDocument packingOrder = orderService.getEntity(AppConstants.Buyer.LULULEMON, orderId);
         ShippingSchedule shippingSchedule = clean(weighingOrder.getShippingScheduleId()) == null ? null : shippingScheduleRepository
                 .findByIdAndOrderIdAndBuyerCode(weighingOrder.getShippingScheduleId(), orderId, AppConstants.Buyer.LULULEMON)
                 .orElse(null);

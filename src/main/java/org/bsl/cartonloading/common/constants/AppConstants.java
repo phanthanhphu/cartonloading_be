@@ -146,6 +146,12 @@ public final class AppConstants {
         public static final String LULU_SHIPPING_SCHEDULER = "SHIPPING_SCHEDULER";
         public static final String LULU_SHIPPING_SCHEDULE_CREATE = "SHIPPING_SCHEDULE_CREATE";
         public static final String LULU_SHIPPING_SCHEDULE_REOPEN = "SHIPPING_SCHEDULE_REOPEN";
+        public static final String LULU_MANAGEMENT_REPORT_VIEW = "MANAGEMENT_REPORT_VIEW";
+        public static final String LULU_MANAGEMENT_REPORT_EXPORT = "MANAGEMENT_REPORT_EXPORT"; // legacy: no longer grants access
+        /** Management Reports: Option 1, independent of ADMIN role and selected Factory. */
+        public static final String LULU_MANAGEMENT_REPORT_ALL = "MANAGEMENT_REPORT_ALL_FACTORIES";
+        /** Management Reports: Option 2, restricted to the User's assigned Factories. */
+        public static final String LULU_MANAGEMENT_REPORT_ASSIGNED = "MANAGEMENT_REPORT_ASSIGNED_FACTORIES";
         public static final String LULU_SCAN_RFID_SSCC_SKU_WEIGHT = "SCAN_RFID_SSCC_SKU_WEIGHT";
         public static final String LULU_VIEW_ONLY = "VIEW_ONLY";
         private Permission() { }

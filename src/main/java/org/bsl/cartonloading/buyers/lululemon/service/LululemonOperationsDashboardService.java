@@ -2,7 +2,7 @@ package org.bsl.cartonloading.buyers.lululemon.service;
 
 import org.bsl.cartonloading.model.Factory;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.lululemon.model.Carton;
 import org.bsl.cartonloading.buyers.lululemon.model.PoPickClaim;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
@@ -80,8 +80,8 @@ public class LululemonOperationsDashboardService {
         Map<String, PoPickClaim> claims = mongo.find(Query.query(Criteria.where("buyerCode").is(BUYER)), PoPickClaim.class)
                 .stream().filter(c -> "ACTIVE".equalsIgnoreCase(clean(c.getState())))
                 .collect(Collectors.toMap(c -> key(c.getOrderId(), c.getPoNumber()), c -> c, (a,b) -> a));
-        Map<String, PackingOrder> orders = mongo.find(Query.query(Criteria.where("buyerCode").is(BUYER)), PackingOrder.class)
-                .stream().collect(Collectors.toMap(PackingOrder::getId, row -> row, (a,b) -> a));
+        Map<String, OrderDocument> orders = mongo.find(Query.query(Criteria.where("buyerCode").is(BUYER)), OrderDocument.class)
+                .stream().collect(Collectors.toMap(OrderDocument::getId, row -> row, (a,b) -> a));
         Map<String, List<Carton>> cartonGroups = new HashMap<>();
         for (Carton carton : mongo.find(Query.query(Criteria.where("buyerCode").is(BUYER)), Carton.class)) {
             if (!selectedFactoryScope.matches(activeFactory, carton.getFactoryCode())) continue;

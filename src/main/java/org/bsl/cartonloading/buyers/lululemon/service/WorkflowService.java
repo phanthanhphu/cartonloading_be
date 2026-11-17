@@ -32,9 +32,9 @@ import org.bsl.cartonloading.buyers.lululemon.repository.ScanEventRepository;
 import org.bsl.cartonloading.buyers.lululemon.repository.ShippingScheduleRepository;
 import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 import org.bsl.cartonloading.model.BuyerAccess;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.service.AuditLogService;
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.service.RequestActor;
 import org.bsl.cartonloading.service.FactoryCatalogService;
 import org.bsl.cartonloading.service.SelectedFactoryScope;
@@ -69,7 +69,7 @@ public class WorkflowService {
     private final CartonItemRepository itemRepository;
     private final ScanEventRepository scanEventRepository;
     private final ShippingScheduleRepository shippingScheduleRepository;
-    private final PackingOrderService orderService;
+    private final BuyerOrderLookupService orderService;
     private final ExcelImportSupport excelSupport;
     private final BuyerFactoryAccessService factoryAccess;
     private final MongoTemplate mongoTemplate;
@@ -86,7 +86,7 @@ public class WorkflowService {
             CartonItemRepository itemRepository,
             ScanEventRepository scanEventRepository,
             ShippingScheduleRepository shippingScheduleRepository,
-            PackingOrderService orderService,
+            BuyerOrderLookupService orderService,
             ExcelImportSupport excelSupport,
             BuyerFactoryAccessService factoryAccess,
             MongoTemplate mongoTemplate,
@@ -190,7 +190,7 @@ public class WorkflowService {
      * existing PO changes must be made through the PO management UI.
      */
     public byte[] exportActionExcel(String buyerCode, String orderId) {
-        PackingOrder order = requireOrder(buyerCode, orderId);
+        OrderDocument order = requireOrder(buyerCode, orderId);
         String selected = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         String factory = normalizeFactory(order.getFactoryCode());
         selectedFactoryScope.assertMatches(selected, factory);
@@ -335,7 +335,7 @@ public class WorkflowService {
      * EDIT: the legacy API still requires an exported ID and explicit ACTION.
      */
     private ActionPlan readActionPlan(String buyerCode, String orderId, MultipartFile file, String mode) {
-        PackingOrder order = requireOrder(buyerCode, orderId);
+        OrderDocument order = requireOrder(buyerCode, orderId);
         String selected = selectedFactoryScope.requested(AppConstants.Buyer.LULULEMON);
         String factory = normalizeFactory(order.getFactoryCode());
         selectedFactoryScope.assertMatches(selected, factory);
@@ -575,7 +575,7 @@ public class WorkflowService {
 
     private synchronized ImportResult importAllBpInternal(String buyerCode, String orderId, MultipartFile file,
                                                            boolean replace, boolean sharedImport, Set<Integer> onlySourceRows) {
-        PackingOrder order = requireOrder(buyerCode, orderId);
+        OrderDocument order = requireOrder(buyerCode, orderId);
         if (order.getFactoryCode() == null || order.getFactoryCode().isBlank())
             throw new IllegalArgumentException("Classify legacy Order Factory before ALL_BP import.");
         List<ParsedPo> parsed;
@@ -984,7 +984,7 @@ public class WorkflowService {
 
         String factoryCode = normalizeFactory(request.factoryCode());
         if (factoryCode == null) factoryCode = normalizeFactory(po.getFactoryCode());
-        PackingOrder owningOrder = requireOrder(buyerCode, orderId);
+        OrderDocument owningOrder = requireOrder(buyerCode, orderId);
         if (factoryCode == null || !factoryCode.equalsIgnoreCase(owningOrder.getFactoryCode()))
             throw new IllegalArgumentException("PO Factory must match its Order Factory.");
         if (factoryCode != null && !factoryCode.equalsIgnoreCase(String.valueOf(po.getFactoryCode())))
@@ -2539,10 +2539,10 @@ public class WorkflowService {
             throw new org.springframework.security.access.AccessDeniedException("Factory access denied: " + normalized);
     }
 
-    private PackingOrder requireOrder(String buyerCode, String orderId) {
+    private OrderDocument requireOrder(String buyerCode, String orderId) {
         String buyer = BuyerAccess.normalize(buyerCode);
         if (!AppConstants.Buyer.LULULEMON.equals(buyer)) throw new IllegalArgumentException(AppMessages.workflowOnlyFor(AppConstants.Buyer.LULULEMON));
-        PackingOrder order = orderService.getEntity(AppConstants.Buyer.LULULEMON, orderId);
+        OrderDocument order = orderService.getEntity(AppConstants.Buyer.LULULEMON, orderId);
         if (AppConstants.OrderDeletion.DELETING.equals(order.getDeletionState())) {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.CONFLICT,

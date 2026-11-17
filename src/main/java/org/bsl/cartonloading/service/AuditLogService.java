@@ -6,7 +6,7 @@ import org.bsl.cartonloading.model.AuditLog;
 import org.bsl.cartonloading.model.BuyerAccess;
 import org.bsl.cartonloading.model.User;
 import org.bsl.cartonloading.common.constants.AppConstants;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
 import org.bsl.cartonloading.buyers.es.model.CartonScanTransaction;
 import org.bsl.cartonloading.buyers.es.model.Shipment;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
@@ -75,7 +75,7 @@ public class AuditLogService {
                 if (carton != null) return new TrustedScope(carton.getBuyerCode(), carton.getFactoryCode());
                 PurchaseOrder po = mongo.findById(resourceId, PurchaseOrder.class);
                 if (po != null) return new TrustedScope(po.getBuyerCode(), po.getFactoryCode());
-                PackingOrder order = mongo.findById(resourceId, PackingOrder.class);
+                OrderDocument order = mongo.findById(resourceId, OrderDocument.class);
                 if (order != null && AppConstants.Buyer.LULULEMON.equals(BuyerAccess.normalize(order.getBuyerCode())))
                     return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
             }
@@ -86,19 +86,19 @@ public class AuditLogService {
             case AppConstants.AuditResource.CARTON, AppConstants.AuditResource.SHIPMENT_CARTON -> {
                 CartonScanTransaction carton = mongo.findById(resourceId, CartonScanTransaction.class);
                 if (carton != null && carton.getOrderId() != null) {
-                    PackingOrder order = mongo.findById(carton.getOrderId(), PackingOrder.class);
+                    OrderDocument order = mongo.findById(carton.getOrderId(), OrderDocument.class);
                     if (order != null && BuyerAccess.normalize(carton.getBuyerCode()).equals(BuyerAccess.normalize(order.getBuyerCode())))
                         return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
                 }
                 Shipment shipment = mongo.findById(resourceId, Shipment.class);
                 if (shipment != null && shipment.getOrderId() != null) {
-                    PackingOrder order = mongo.findById(shipment.getOrderId(), PackingOrder.class);
+                    OrderDocument order = mongo.findById(shipment.getOrderId(), OrderDocument.class);
                     if (order != null && BuyerAccess.normalize(shipment.getBuyerCode()).equals(BuyerAccess.normalize(order.getBuyerCode())))
                         return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
                 }
             }
             case AppConstants.AuditResource.ORDER -> {
-                PackingOrder order = mongo.findById(resourceId, PackingOrder.class);
+                OrderDocument order = mongo.findById(resourceId, OrderDocument.class);
                 if (order != null) return new TrustedScope(order.getBuyerCode(), order.getFactoryCode());
             }
             default -> { /* Global/system events stay unassigned unless caller specifies trusted scope. */ }

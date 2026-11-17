@@ -6,8 +6,8 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFColor;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
-import org.bsl.cartonloading.buyers.es.model.PackingOrder;
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.model.OrderDocument;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.buyers.lululemon.dto.PoShippingPlanRequest;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
 import org.bsl.cartonloading.buyers.lululemon.repository.PurchaseOrderRepository;
@@ -51,7 +51,7 @@ public class PoShippingPlanService {
     private static final String SUBMITTED = "SUBMITTED";
     private static final String REOPENED = "REOPENED";
 
-    private final PackingOrderService orders;
+    private final BuyerOrderLookupService orders;
     private final PurchaseOrderRepository pos;
     private final BuyerFactoryAccessService factoryAccess;
     private final FactoryCatalogService factories;
@@ -72,7 +72,7 @@ public class PoShippingPlanService {
     private record SubmissionState(boolean submitted, boolean autoSubmitted, boolean reopened,
                                    String submittedBy, String submittedAt) { }
 
-    public PoShippingPlanService(PackingOrderService orders, PurchaseOrderRepository pos,
+    public PoShippingPlanService(BuyerOrderLookupService orders, PurchaseOrderRepository pos,
                                  BuyerFactoryAccessService factoryAccess, FactoryCatalogService factories,
                                  MongoTemplate mongo, AuditLogService audit,
                                  SelectedFactoryScope selectedFactoryScope, AccessControl accessControl) {
@@ -292,6 +292,12 @@ public class PoShippingPlanService {
                     ? "Shipping Scheduler permission is required to add POs to an existing date."
                     : "Create Shipping Schedule permission is required to create a new date.");
         }
+        // NEW Shipping Dates cannot be today or earlier: they auto-submit at
+        // Vietnam midnight. Existing explicitly reopened days remain editable.
+        if (!existingSchedule && !request.shippingDate().isAfter(LocalDate.now(SHIPPING_ZONE))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "New Shipping Date must be after today (Vietnam time).");
+        }
         assertEditable(orderId, factory, request.shippingDate());
         String actor = RequestActor.current();
         LocalDateTime now = LocalDateTime.now();
@@ -415,12 +421,18 @@ public class PoShippingPlanService {
         return Map.of("shippingDate", day.toString(), "factoryCode", factory, "removedCount", members.size());
     }
 
-    /** Server-side XLSX for one Shipping Date; explicit, ordered, whitelisted columns. */
+    /** Existing callers export every PO, independent from the QC-specific filters. */
     public byte[] exportExcel(String buyer, String orderId, String factoryCode, LocalDate day,
                               List<String> requestedColumns) {
+        return exportExcel(buyer, orderId, factoryCode, day, requestedColumns, null);
+    }
+
+    /** Filtered export; keep exactly the current customizable Shipping POs worksheet format. */
+    public byte[] exportExcel(String buyer, String orderId, String factoryCode, LocalDate day,
+                              List<String> requestedColumns, Set<String> allowedPoIds) {
         ShippingDayDetail item = detail(buyer, orderId, factoryCode, day);
         List<String> columns = PoShippingExportColumns.resolve(requestedColumns);
-        PackingOrder parent = orders.getEntity(AppConstants.Buyer.LULULEMON, orderId);
+        OrderDocument parent = orders.getEntity(AppConstants.Buyer.LULULEMON, orderId);
         try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("Shipping POs");
             Row titleRow = sheet.createRow(0);
@@ -458,6 +470,7 @@ public class PoShippingPlanService {
                     .collect(Collectors.toMap(PurchaseOrder::getId, po -> po, (first, second) -> first));
             int rowNo = 0;
             for (ShippingPo selected : item.pos()) {
+                if (allowedPoIds != null && !allowedPoIds.contains(selected.id())) continue;
                 PurchaseOrder po = byId.get(selected.id());
                 if (po == null) continue;
                 Row row = sheet.createRow(++rowNo + 2);

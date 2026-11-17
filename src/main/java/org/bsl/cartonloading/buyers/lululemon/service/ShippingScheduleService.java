@@ -1,6 +1,6 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
 import org.bsl.cartonloading.buyers.lululemon.dto.*;
 import org.bsl.cartonloading.buyers.lululemon.model.*;
@@ -31,7 +31,7 @@ public class ShippingScheduleService {
     private final PurchaseOrderRepository poRepository;
     private final CartonRepository cartonRepository;
     private final WeighingResultRepository weightResultRepository;
-    private final PackingOrderService orderService;
+    private final BuyerOrderLookupService orderService;
     private final BuyerFactoryAccessService factoryAccess;
     private final WeighingService weighingService;
     private final AuditLogService auditLogService;
@@ -43,7 +43,7 @@ public class ShippingScheduleService {
             PurchaseOrderRepository poRepository,
             CartonRepository cartonRepository,
             WeighingResultRepository weightResultRepository,
-            PackingOrderService orderService,
+            BuyerOrderLookupService orderService,
             BuyerFactoryAccessService factoryAccess,
             WeighingService weighingService,
             AuditLogService auditLogService,

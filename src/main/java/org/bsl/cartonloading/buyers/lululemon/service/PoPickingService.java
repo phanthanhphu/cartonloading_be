@@ -3,7 +3,7 @@ package org.bsl.cartonloading.buyers.lululemon.service;
 import java.time.LocalDateTime;
 import java.util.*;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
-import org.bsl.cartonloading.buyers.es.service.PackingOrderService;
+import org.bsl.cartonloading.shared.orders.service.BuyerOrderLookupService;
 import org.bsl.cartonloading.buyers.lululemon.model.PoPickClaim;
 import org.bsl.cartonloading.buyers.lululemon.model.PoPickEvent;
 import org.bsl.cartonloading.buyers.lululemon.model.PurchaseOrder;
@@ -25,13 +25,13 @@ import org.springframework.stereotype.Service;
 public class PoPickingService {
     private final PurchaseOrderRepository pos;
     private final CartonRepository cartons;
-    private final PackingOrderService orders;
+    private final BuyerOrderLookupService orders;
     private final BuyerFactoryAccessService access;
     private final MongoTemplate mongo;
     private final FactoryCatalogService factories;
 
     public PoPickingService(PurchaseOrderRepository pos, CartonRepository cartons,
-            PackingOrderService orders, BuyerFactoryAccessService access, MongoTemplate mongo, FactoryCatalogService factories) {
+            BuyerOrderLookupService orders, BuyerFactoryAccessService access, MongoTemplate mongo, FactoryCatalogService factories) {
         this.pos = pos; this.cartons = cartons; this.orders = orders; this.access = access; this.mongo = mongo; this.factories = factories;
     }
 
