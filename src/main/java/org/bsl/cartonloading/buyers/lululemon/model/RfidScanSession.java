@@ -36,6 +36,8 @@ public class RfidScanSession {
     /** SCANNING, PASS, FAILED. */
     private String status;
     private String reason;
+    /** Synthetic EPC attempt for isolated UAT only; never claim physical RFID reads. */
+    private boolean uatSimulated = false;
     private String startedBy;
     private String finishedBy;
     private LocalDateTime startedAt;

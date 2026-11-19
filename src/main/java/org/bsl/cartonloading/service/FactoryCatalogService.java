@@ -6,6 +6,11 @@ import org.bsl.cartonloading.dto.admin.FactoryRequest;
 import org.bsl.cartonloading.model.Factory;
 import org.bsl.cartonloading.repository.FactoryRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.bsl.cartonloading.common.socket.AppSocketPublisher;
 import java.time.LocalDateTime;
 import java.util.Comparator;
@@ -18,10 +23,12 @@ public class FactoryCatalogService {
     private final AuditLogService audit;
     private final AppSocketPublisher socketPublisher;
     private final FactoryUsageService factoryUsage;
+    private final MongoTemplate mongoTemplate;
     public FactoryCatalogService(FactoryRepository repository, AuditLogService audit,
-                                 AppSocketPublisher socketPublisher, FactoryUsageService factoryUsage) {
+                                 AppSocketPublisher socketPublisher, FactoryUsageService factoryUsage,
+                                 MongoTemplate mongoTemplate) {
         this.repository = repository; this.audit = audit; this.socketPublisher = socketPublisher;
-        this.factoryUsage = factoryUsage;
+        this.factoryUsage = factoryUsage; this.mongoTemplate = mongoTemplate;
     }
     public List<Factory> list(String buyerKey, boolean includeInactive) {
         if (!AppConstants.Buyer.LULULEMON.equalsIgnoreCase(buyerKey))
@@ -74,6 +81,23 @@ public class FactoryCatalogService {
                 factory.getId(), "Factory " + code, AppConstants.Buyer.LULULEMON,
                 code, before, null, null, null);
         socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.FACTORY, AppConstants.AuditAction.DELETE);
+    }
+
+    /** Change only the status atomically; do not overwrite a concurrently edited Factory name. */
+    public Factory updateStatus(String id, boolean active) {
+        Factory before = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Factory not found"));
+        if (before.isActive() == active) return before;
+        java.util.Map<String, Object> snapshot = audit.snapshot(before);
+        Query query = Query.query(Criteria.where("_id").is(id));
+        Update update = new Update().set("active", active).set("updatedAt", LocalDateTime.now());
+        Factory saved = mongoTemplate.findAndModify(query, update,
+                FindAndModifyOptions.options().returnNew(true), Factory.class);
+        if (saved == null) throw new IllegalArgumentException("Factory not found");
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.UPDATE, AppConstants.AuditResource.FACTORY,
+                saved.getId(), "Factory " + saved.getCode() + " active=" + saved.isActive(),
+                AppConstants.Buyer.LULULEMON, saved.getCode(), snapshot, saved, null, null);
+        socketPublisher.organizationChanged(AppConstants.OrganizationRealtime.FACTORY, AppConstants.AuditAction.UPDATE);
+        return saved;
     }
 
     public Factory update(String id, FactoryRequest request) {

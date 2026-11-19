@@ -24,6 +24,9 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.LocalDateTime;
+import java.math.BigInteger;
+import java.security.SecureRandom;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -304,6 +307,87 @@ public class LululemonRfidService {
         refreshRfidReview(orderId, poId);
         socketPublisher.cartonLoadingChanged("RFID_" + status, carton.getId());
         return session;
+    }
+
+    /**
+     * Disposable UAT database only (enforced by UatCartonTestController).
+     * Reuse the actual read/finish validation so a simulated PASS is a real server PASS.
+     * Every generated EPC is marked as synthetic in the session; no physical read is claimed.
+     */
+    public synchronized RfidScanSession simulateUat(String orderId, String poId, String sscc,
+                                                     String stationCode, String selectedStatus) {
+        if (!AppConstants.RfidCheck.PASS.equals(selectedStatus)
+                && !AppConstants.RfidCheck.FAILED.equals(selectedStatus)) {
+            throw new IllegalArgumentException("UAT RFID selection must be PASS or FAILED.");
+        }
+        Carton carton = requireCarton(orderId, poId, sscc);
+        if (carton.getWeightStatus() != null) {
+            throw new IllegalArgumentException("Weight is already saved. Reopen Weight before testing RFID again.");
+        }
+        RfidScanSession previous = latest(orderId, poId, sscc);
+        if (previous != null && AppConstants.RfidCheck.PASS.equals(previous.getStatus())) {
+            throw new IllegalArgumentException("RFID already PASS. Admin must reopen before re-testing.");
+        }
+        if (previous != null && "SCANNING".equals(previous.getStatus())
+                && (previous.getReadCount() > 0 || !previous.getEpcs().isEmpty())) {
+            throw new IllegalArgumentException("Active RFID session contains reads. Finish or reset it before UAT simulation.");
+        }
+        // Numeric TrueVUE SKU can be encoded into the 50-bit product field.
+        // Reject any unsupported test data rather than forging a false PASS.
+        String expectedSku = TrueVueDecoder.skuKey(carton.getLabelConfirmedSku());
+        BigInteger product = null;
+        if (AppConstants.RfidCheck.PASS.equals(selectedStatus)) {
+            if (expectedSku == null || !expectedSku.matches("[0-9]+"))
+                throw new IllegalArgumentException("UAT RFID PASS requires a numeric TrueVUE SKU.");
+            product = new BigInteger(expectedSku);
+            if (product.signum() < 0 || product.bitLength() > 50)
+                throw new IllegalArgumentException("UAT RFID SKU exceeds the TrueVUE 50-bit product field.");
+            if (carton.getPlannedQty() == null || carton.getPlannedQty() <= 0 || carton.getPlannedQty() > 5000)
+                throw new IllegalArgumentException("UAT RFID PASS requires 1-5000 planned items.");
+            if (items.findByCartonIdOrderByItemNoAsc(carton.getId()).size() != carton.getPlannedQty())
+                throw new IllegalArgumentException("Item slots do not match planned Qty; cannot simulate RFID PASS.");
+        }
+        // An existing empty SCANNING session may belong to the real RFID station.
+        // Reuse that empty session instead of changing its hardware station during UAT.
+        // A session containing actual reads was rejected above and may never be simulated.
+        RfidScanSession session = previous != null && "SCANNING".equals(previous.getStatus())
+                ? previous : start(orderId, poId, new RfidStartRequest(sscc, stationCode));
+        if (!"SCANNING".equals(session.getStatus()))
+            throw new IllegalArgumentException("A fresh RFID scan must be started first.");
+        if (AppConstants.RfidCheck.PASS.equals(selectedStatus)) {
+            SecureRandom random = new SecureRandom();
+            Set<String> generated = new LinkedHashSet<>();
+            int required = session.getExpectedQty();
+            for (int index = 0; index < required; index++) {
+                String epc = null;
+                for (int attempt = 0; attempt < 100; attempt++) {
+                    long serial = 1_000_000_000L + Math.floorMod(random.nextLong(), 15_000_000_000L);
+                    BigInteger value = BigInteger.valueOf(0x3BD).shiftLeft(84)
+                            .or(product.shiftLeft(34)).or(BigInteger.valueOf(serial));
+                    String raw = value.toString(16).toUpperCase(Locale.ROOT);
+                    String candidate = "0".repeat(24 - raw.length()) + raw;
+                    if (!generated.contains(candidate)
+                            && !sessions.existsVerifiedEpcInOtherCarton(AppConstants.Buyer.LULULEMON, candidate, carton.getId())) {
+                        epc = candidate;
+                        break;
+                    }
+                }
+                if (epc == null) throw new IllegalArgumentException("Unable to generate unique UAT EPCs.");
+                generated.add(epc);
+            }
+            List<String> all = new ArrayList<>(generated);
+            for (int i = 0; i < all.size(); i += 500) {
+                ingest(orderId, poId, sscc, new RfidEpcRequest(session.getId(),
+                        all.subList(i, Math.min(all.size(), i + 500)), null));
+            }
+        }
+        RfidScanSession finished = finish(orderId, poId, sscc, session.getId());
+        if (!selectedStatus.equals(finished.getStatus())) {
+            throw new IllegalStateException("Backend validation did not produce the requested UAT result.");
+        }
+        finished.setUatSimulated(true);
+        finished.setReason("UAT SIMULATED " + selectedStatus + " (NO PHYSICAL RFID). " + finished.getReason());
+        return sessions.save(finished);
     }
 
     /** Explicit admin reopen; do not mutate prior PASS evidence or erase EPC history. */

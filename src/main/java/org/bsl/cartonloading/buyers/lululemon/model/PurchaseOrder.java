@@ -105,6 +105,12 @@ public class PurchaseOrder {
     @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
     private LocalDateTime weighingCompletedAt;
 
+    /** Direct Carton Processing END is independent of legacy shipping/weighing sessions. */
+    private String cartonProcessingEndResult; // PASS, FAILED; never turn a failed carton into PASS
+    private String cartonProcessingEndedBy;
+    @JsonFormat(pattern = AppConstants.DatePattern.DATE_TIME)
+    private LocalDateTime cartonProcessingEndedAt;
+
     private String sourceFileName;
     private Integer sourceRowNumber;
     private String createdBy;

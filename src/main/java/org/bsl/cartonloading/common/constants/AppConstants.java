@@ -75,6 +75,7 @@ public final class AppConstants {
         public static final String WEIGHING_ORDERS = "weighing_orders";
         public static final String WEIGHING_RESULTS = "weighing_results";
         public static final String SHIPPING_SCHEDULES = "shipping_schedules";
+        public static final String PO_SHIPPING_DAY_SUBMISSIONS = "po_shipping_day_submissions";
         public static final String CARTON_CHECKING_HISTORY = "carton_checking_history";
         public static final String PO_PICK_CLAIMS = "po_pick_claims";
         public static final String PO_PICK_HISTORY = "po_pick_history";
@@ -403,6 +404,7 @@ public final class AppConstants {
         public static final String WEIGHING_SESSION_START = "LULULEMON_WEIGHING_SESSION_START";
         public static final String WEIGHING_SESSION_STOP = "LULULEMON_WEIGHING_SESSION_STOP";
         public static final String WEIGHING_SESSION_COMPLETE = "LULULEMON_WEIGHING_SESSION_COMPLETE";
+        public static final String CARTON_PROCESSING_PO_END = "LULULEMON_CARTON_PROCESSING_PO_END";
         public static final String SEND_PO_HANDOFF = "SEND_PO_HANDOFF";
         public static final String CANCEL_PO_HANDOFF = "CANCEL_PO_HANDOFF";
         public static final String DELETE_PO_HANDOFF = "DELETE_PO_HANDOFF";
@@ -453,6 +455,7 @@ public final class AppConstants {
         public static final String WEIGHING_SESSION_STARTED = "LULULEMON_WEIGHING_SESSION_STARTED";
         public static final String WEIGHING_SESSION_STOPPED = "LULULEMON_WEIGHING_SESSION_STOPPED";
         public static final String WEIGHING_SESSION_COMPLETED = "LULULEMON_WEIGHING_SESSION_COMPLETED";
+        public static final String CARTON_PROCESSING_PO_ENDED = "LULULEMON_CARTON_PROCESSING_PO_ENDED";
         public static final String PO_HANDOFF_SENT = "PO_HANDOFF_SENT";
         public static final String PO_HANDOFF_CANCELLED = "PO_HANDOFF_CANCELLED";
         public static final String PO_HANDOFF_DELETED = "PO_HANDOFF_DELETED";

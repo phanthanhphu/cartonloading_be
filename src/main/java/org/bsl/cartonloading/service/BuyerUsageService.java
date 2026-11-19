@@ -40,7 +40,7 @@ public class BuyerUsageService {
         s.put(AppConstants.Collection.CARTON_OPERATIONS, "Carton operations");
         s.put(AppConstants.Collection.FACTORY_BARCODES, "Factory barcodes");
         s.put(AppConstants.Collection.SHIPPING_SCHEDULES, "Shipping schedules");
-        s.put("po_shipping_day_submissions", "Submitted shipping days");
+        s.put(AppConstants.Collection.PO_SHIPPING_DAY_SUBMISSIONS, "Submitted shipping days");
         s.put(AppConstants.Collection.SHIPMENTS, "Shipments");
         s.put(AppConstants.Collection.CARTONS, "Cartons");
         s.put(AppConstants.Collection.CARTON_ITEMS, "Carton items");

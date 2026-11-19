@@ -4,6 +4,7 @@ import org.bsl.cartonloading.security.AccessControl;
 import jakarta.validation.Valid;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.dto.admin.FactoryRequest;
+import org.bsl.cartonloading.dto.admin.FactoryStatusRequest;
 import org.bsl.cartonloading.model.Factory;
 import org.bsl.cartonloading.buyers.core.BuyerFactoryAccessService;
 import org.springframework.security.access.AccessDeniedException;
@@ -33,6 +34,11 @@ public class FactoryController {
     @PutMapping("/{id}")
     @PreAuthorize("@accessControl.isAdmin()")
     public Factory update(@PathVariable String id, @Valid @RequestBody FactoryRequest request) { return service.update(id, request); }
+    @PatchMapping("/{id}/status")
+    @PreAuthorize("@accessControl.isAdmin()")
+    public Factory updateStatus(@PathVariable String id, @Valid @RequestBody FactoryStatusRequest request) {
+        return service.updateStatus(id, request.active());
+    }
     @DeleteMapping("/{id}")
     @PreAuthorize("@accessControl.isAdmin()")
     @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)

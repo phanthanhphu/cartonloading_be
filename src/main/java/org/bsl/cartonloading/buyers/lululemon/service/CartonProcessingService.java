@@ -112,7 +112,12 @@ public class CartonProcessingService {
 
     public record IdentifiedCarton(PurchaseOrder po, Carton carton) { }
     public record StationSummary(String factoryCode, int total, int processed, int passed, int failed,
-                                 int remaining, boolean end, List<String> factories) { }
+                                 int remaining, boolean end, List<String> factories,
+                                 boolean ended, String finalResult, LocalDateTime endedAt) { }
+
+    /** The final PO outcome is derived from ALL planned cartons, never from only the PASS rows. */
+    public record EndPoResult(String poId, String poNumber, String finalResult,
+                              int total, int passed, int failed, LocalDateTime endedAt) { }
     public record WeightResult(Carton carton, WeighingResult event) { }
 
     /** Uses an already-imported/assigned SSCC; never searches POs by picking claims. */
@@ -224,7 +229,7 @@ public class CartonProcessingService {
         String selected = factoryCode == null ? "" : factoryCode.trim().toUpperCase(Locale.ROOT);
         if (selected.isEmpty()) {
             if (accessible.size() == 1) selected = accessible.get(0);
-            else return new StationSummary("", 0, 0, 0, 0, 0, false, accessible);
+            else return new StationSummary("", 0, 0, 0, 0, 0, false, accessible, false, "PENDING", null);
         }
         requireFactory(selected);
         final String factory = selected;
@@ -248,7 +253,66 @@ public class CartonProcessingService {
             }
         }
         int remaining = Math.max(0, total - processed);
-        return new StationSummary(factory, total, processed, passed, failed, remaining, total > 0 && remaining == 0, accessible);
+        boolean onePo = orderId != null && !orderId.isBlank() && poId != null && !poId.isBlank();
+        PurchaseOrder selectedPo = onePo ? factoryPos.stream()
+                .filter(p -> poId.equals(p.getId()) && orderId.equals(p.getOrderId()))
+                .findFirst().orElse(null) : null;
+        // The imported plan is the denominator. A partially generated PO may NOT END.
+        boolean ready = selectedPo != null && selectedPo.getCartonCount() != null
+                && selectedPo.getCartonCount() > 0 && total == selectedPo.getCartonCount()
+                && remaining == 0;
+        String outcome = ready ? (failed > 0 ? AppConstants.RfidCheck.FAILED : AppConstants.RfidCheck.PASS) : "PENDING";
+        boolean ended = ready && selectedPo.getCartonProcessingEndedAt() != null
+                && outcome.equals(selectedPo.getCartonProcessingEndResult());
+        return new StationSummary(factory, total, processed, passed, failed, remaining, ready, accessible,
+                ended, outcome, ended ? selectedPo.getCartonProcessingEndedAt() : null);
+    }
+
+    /** Explicit, audited END. Server revalidates ALL Cartons and refuses a partial PO. */
+    public synchronized EndPoResult endPo(String buyer, String orderId, String poId) {
+        requireBuyer(buyer);
+        if (orderId == null || orderId.isBlank() || poId == null || poId.isBlank())
+            throw new IllegalArgumentException("Order and PO are required to END Carton Processing.");
+        PurchaseOrder po = pos.findByIdAndOrderIdAndBuyerCode(poId, orderId, AppConstants.Buyer.LULULEMON)
+                .orElseThrow(() -> new IllegalArgumentException("PO not found in the selected Order."));
+        requireFactory(po.getFactoryCode());
+        StationSummary checked = summary(buyer, po.getFactoryCode(), orderId, poId);
+        if (!checked.end())
+            throw new IllegalArgumentException("Cannot END PO: " + checked.processed() + "/"
+                    + Math.max(checked.total(), Objects.requireNonNullElse(po.getCartonCount(), 0))
+                    + " cartons have finished BOTH RFID and Weight. Refresh and complete remaining cartons.");
+        if (checked.ended()) {
+            return new EndPoResult(poId, po.getPoNumber(), checked.finalResult(), checked.total(),
+                    checked.passed(), checked.failed(), checked.endedAt());
+        }
+        LocalDateTime now = LocalDateTime.now();
+        po.setCartonProcessingEndResult(checked.finalResult());
+        po.setCartonProcessingEndedBy(RequestActor.current());
+        po.setCartonProcessingEndedAt(now);
+        po.setUpdatedBy(RequestActor.current());
+        po.setUpdatedAt(now);
+        pos.save(po);
+        audit.logChange(RequestActor.current(), AppConstants.AuditAction.CARTON_PROCESSING_PO_END,
+                AppConstants.AuditResource.WEIGHING, poId,
+                "END direct Carton Processing for PO " + po.getPoNumber() + ": FINAL "
+                        + checked.finalResult() + " (" + checked.passed() + " PASS, " + checked.failed() + " FAILED)",
+                AppConstants.Buyer.LULULEMON, po.getFactoryCode(), null,
+                Map.of("finalResult", checked.finalResult(), "total", checked.total(),
+                        "passed", checked.passed(), "failed", checked.failed()), null, null);
+        socket.cartonLoadingChanged(AppConstants.SocketEvent.CARTON_PROCESSING_PO_ENDED, poId);
+        return new EndPoResult(poId, po.getPoNumber(), checked.finalResult(), checked.total(),
+                checked.passed(), checked.failed(), now);
+    }
+
+    /** Reopening a carton invalidates a previous direct PO END (previous audit is preserved). */
+    private void invalidateDirectEnd(PurchaseOrder po) {
+        if (po.getCartonProcessingEndedAt() == null) return;
+        po.setCartonProcessingEndResult(null);
+        po.setCartonProcessingEndedAt(null);
+        po.setCartonProcessingEndedBy(null);
+        po.setUpdatedBy(RequestActor.current());
+        po.setUpdatedAt(LocalDateTime.now());
+        pos.save(po);
     }
 
     /** RFID must be finished, but FAILED does not block weighing. Preserve independent results. */
@@ -297,6 +361,39 @@ public class CartonProcessingService {
 
     public synchronized WeightResult manualWeight(String buyer, CartonProcessingWeightRequest input) {
         return captureWeight(buyer, input, AppConstants.WeightSource.MANUAL, null);
+    }
+
+    /** UAT only: input kg determines the real tolerance-based result, never overwrite it. */
+    public synchronized WeightResult simulateUatWeight(String buyer, String sscc,
+                                                         BigDecimal actualKg, String selectedStatus) {
+        if (!AppConstants.WeightStatus.PASS.equals(selectedStatus)
+                && !AppConstants.WeightStatus.FAILED.equals(selectedStatus))
+            throw new IllegalArgumentException("UAT Weight selection must be PASS or FAILED.");
+        Carton carton = requireCarton(buyer, sscc);
+        if (!rfidFinished(carton)) throw new IllegalArgumentException("Finish RFID before UAT weight.");
+        if (carton.getWeightStatus() != null) throw new IllegalArgumentException("Weight already saved.");
+        RfidScanSession finished = rfidService.latest(carton.getOrderId(), carton.getPoId(), carton.getSscc18());
+        if (finished == null || !Objects.equals(finished.getId(), carton.getRfidSessionId())
+                || !Objects.equals(finished.getStatus(), carton.getRfidStatus()) || finished.getFinishedAt() == null)
+            throw new IllegalArgumentException("A completed persisted RFID attempt is required before UAT weighing.");
+        PurchaseOrder po = requirePo(carton);
+        if (actualKg == null || actualKg.signum() <= 0 || actualKg.compareTo(BigDecimal.valueOf(10000)) > 0
+                || actualKg.scale() > 3) throw new IllegalArgumentException("Enter 0-10000 kg (3 decimals maximum).");
+        if (po.getGrossWeightKg() == null || po.getGrossWeightKg() <= 0)
+            throw new IllegalArgumentException("ALL_BP gross weight (GW) missing for the PO.");
+        BigDecimal gross = BigDecimal.valueOf(po.getGrossWeightKg()).setScale(4, RoundingMode.HALF_UP);
+        BigDecimal expected = gross.multiply(BigDecimal.valueOf(carton.getPlannedQty())).setScale(3, RoundingMode.HALF_UP);
+        BigDecimal actual = actualKg.setScale(3, RoundingMode.HALF_UP);
+        BigDecimal tolerance = gross.setScale(3, RoundingMode.HALF_UP);
+        String computed = actual.subtract(expected).abs().compareTo(tolerance) <= 0
+                ? AppConstants.WeightStatus.PASS : AppConstants.WeightStatus.FAILED;
+        if (!selectedStatus.equals(computed))
+            throw new IllegalArgumentException("UAT selected " + selectedStatus + ", but " + actual
+                    + " kg is " + computed + " for allowed range "
+                    + expected.subtract(tolerance).max(BigDecimal.ZERO) + " to "
+                    + expected.add(tolerance) + " kg. Adjust weight or selection.");
+        return captureWeight(buyer, new CartonProcessingWeightRequest(sscc, "UAT-SCALE", actualKg),
+                "UAT_SIMULATOR", null);
     }
 
     private WeightResult captureWeight(String buyer, CartonProcessingWeightRequest input, String source, String eventId) {
@@ -415,6 +512,8 @@ public class CartonProcessingService {
         carton.setUpdatedBy(RequestActor.current());
         carton.setUpdatedAt(now);
         carton = cartons.save(carton);
+        // An earlier END is no longer valid after any weighing is reopened.
+        invalidateDirectEnd(requirePo(carton));
         historyProjection.removeCurrent(carton);
         audit.logChange(RequestActor.current(), AppConstants.AuditAction.REWEIGH_OPEN,
                 AppConstants.AuditResource.WEIGHING, carton.getId(),

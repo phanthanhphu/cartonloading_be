@@ -478,8 +478,9 @@ public class OrderManagementService {
         return page(rows, safePage, safeSize);
     }
 
-    private record InspectionCounts(int generated, int rfidPass, int weightPass, int rfidFail, int weightFail) {
-        private static final InspectionCounts EMPTY = new InspectionCounts(0, 0, 0, 0, 0);
+    private record InspectionCounts(int generated, int rfidPass, int weightPass, int rfidFail, int weightFail,
+                                    int weightHold, int pairedProcessed) {
+        private static final InspectionCounts EMPTY = new InspectionCounts(0, 0, 0, 0, 0, 0, 0);
     }
 
     private static int count(Document row, String key) {
@@ -497,20 +498,26 @@ public class OrderManagementService {
                         .sum(ConditionalOperators.when(Criteria.where("weightStatus").is(AppConstants.WeightStatus.PASS)).then(1).otherwise(0)).as("weightPass")
                         .sum(ConditionalOperators.when(Criteria.where("rfidStatus").is(AppConstants.RfidCheck.FAILED)).then(1).otherwise(0)).as("rfidFail")
                         .sum(ConditionalOperators.when(Criteria.where("weightStatus").in(AppConstants.WeightStatus.FAILED, "HOLD")).then(1).otherwise(0)).as("weightFail")
+                        .sum(ConditionalOperators.when(Criteria.where("weightStatus").is("HOLD")).then(1).otherwise(0)).as("weightHold")
+                        .sum(ConditionalOperators.when(new Criteria().andOperator(
+                                Criteria.where("rfidStatus").in(AppConstants.RfidCheck.PASS, AppConstants.RfidCheck.FAILED),
+                                Criteria.where("weightStatus").in(AppConstants.WeightStatus.PASS, AppConstants.WeightStatus.FAILED)))
+                                .then(1).otherwise(0)).as("pairedProcessed")
         );
         Map<String, InspectionCounts> counts = new HashMap<>();
         for (Document row : mongo.aggregate(agg, Carton.class, Document.class).getMappedResults()) {
             String poId = row.getString("_id");
             if (poId == null) continue;
             counts.put(poId, new InspectionCounts(count(row, "generated"), count(row, "rfidPass"),
-                    count(row, "weightPass"), count(row, "rfidFail"), count(row, "weightFail")));
+                    count(row, "weightPass"), count(row, "rfidFail"), count(row, "weightFail"), count(row, "weightHold"),
+                    count(row, "pairedProcessed")));
         }
         return counts;
     }
 
     private static PoInspectionProgress progressFromCounts(PurchaseOrder po, InspectionCounts counts) {
         return PoInspectionProgress.fromCounts(po, counts.generated(), counts.rfidPass(), counts.weightPass(),
-                counts.rfidFail(), counts.weightFail());
+                counts.rfidFail(), counts.weightFail(), counts.weightHold(), counts.pairedProcessed());
     }
 
     /** All scheduled PO, not just the current page or the current text/status filters. */

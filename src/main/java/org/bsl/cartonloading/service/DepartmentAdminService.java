@@ -74,7 +74,9 @@ public class DepartmentAdminService {
 
     public Department update(String id, DepartmentRequest request) {
         Department row = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(AppMessages.DEPARTMENT_NOT_FOUND));
-        String factory = factory(request.factory());
+        // Keep metadata editable for historical Departments on INACTIVE Factories.
+        // Moving a Department to a different Factory still requires an ACTIVE target.
+        String factory = factory(request.factory(), row.getFactory());
         String division = required(request.division(), AppMessages.DIVISION_REQUIRED);
         String name = required(request.departmentName(), AppMessages.DEPARTMENT_NAME_REQUIRED);
         repository.findByFactoryIgnoreCaseAndDivisionIgnoreCaseAndDepartmentNameIgnoreCase(factory, division, name)
@@ -113,9 +115,12 @@ public class DepartmentAdminService {
         return AppMessages.departmentAuditLabel(row.getFactory(), row.getDivision(), row.getDepartmentName());
     }
 
-    private String factory(String value) {
+    private String factory(String value) { return factory(value, null); }
+    private String factory(String value, String existingFactory) {
         String v = FactoryCodes.requireValid(required(value, AppMessages.FACTORY_REQUIRED));
-        factories.requireActive(AppConstants.Buyer.LULULEMON, v);
+        if (existingFactory == null || !v.equalsIgnoreCase(existingFactory)) {
+            factories.requireActive(AppConstants.Buyer.LULULEMON, v);
+        }
         return v;
     }
 

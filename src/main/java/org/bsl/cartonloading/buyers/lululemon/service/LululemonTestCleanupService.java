@@ -1,8 +1,7 @@
 package org.bsl.cartonloading.buyers.lululemon.service;
 
-import org.bsl.cartonloading.model.CartonProcessingHistory;
 import org.bsl.cartonloading.shared.orders.model.OrderDocument;
-import org.bsl.cartonloading.buyers.lululemon.model.*;
+import org.bsl.cartonloading.buyers.lululemon.model.RfidPdaCapture;
 import org.bsl.cartonloading.common.constants.AppConstants;
 import org.bsl.cartonloading.service.AuditLogService;
 import org.bsl.cartonloading.service.RequestActor;
@@ -14,7 +13,6 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -24,14 +22,17 @@ public class LululemonTestCleanupService {
     private final MongoTemplate template;
     private final AuditLogService audit;
     private final Environment environment;
+    private final LululemonOrderCascadeDeleteService cascadeDelete;
 
     @Value("${lululemon.test-cleanup.enabled:false}")
     private boolean enabled;
 
-    public LululemonTestCleanupService(MongoTemplate template, AuditLogService audit, Environment environment) {
+    public LululemonTestCleanupService(MongoTemplate template, AuditLogService audit,
+                                       Environment environment, LululemonOrderCascadeDeleteService cascadeDelete) {
         this.template = template;
         this.audit = audit;
         this.environment = environment;
+        this.cascadeDelete = cascadeDelete;
     }
 
     /** Feature status can be checked safely without enabling the destructive endpoint. */
@@ -39,7 +40,6 @@ public class LululemonTestCleanupService {
         return enabled && !environment.acceptsProfiles(Profiles.of("prod", "production"));
     }
 
-    /** Read-only availability response for the existing ADMIN status endpoint. */
     public Map<String, Boolean> status(String buyer, String orderId) {
         if (!isTestCleanupEnabled()) return Map.of("enabled", false);
         assertAvailable(buyer, orderId);
@@ -59,101 +59,31 @@ public class LululemonTestCleanupService {
         }
     }
 
-    /** Count exactly what will be removed. Read-only; independent of order name/user input. */
+    /** Read-only preview from the SAME target inventory and queries as actual deletion. */
     public Map<String, Object> preview(String buyer, String orderId) {
         assertAvailable(buyer, orderId);
         OrderDocument entity = template.findById(orderId, OrderDocument.class);
-        Map<String, Long> counts = new LinkedHashMap<>();
-        for (Target target : targets(orderId)) {
-            counts.put(target.label(), template.count(target.query(), target.collection()));
-        }
-        boolean activeCapture = template.exists(captureQuery(orderId).addCriteria(Criteria.where("stopped").is(false)), RfidPdaCapture.class);
+        Map<String, Long> counts = cascadeDelete.previewCounts(orderId);
+        boolean activeCapture = template.exists(Query.query(Criteria.where("buyer_key").is(AppConstants.Buyer.LULULEMON)
+                .and("order").is(orderId).and("stopped").is(false)), RfidPdaCapture.class);
         return Map.of("orderId", orderId, "orderName", entity.getOrderName(),
                 "counts", counts, "activeCapture", activeCapture);
     }
 
     /**
-     * TEST-ONLY destructive cleanup by OrderId and buyer (never by PO number or SSCC alone).
-     * No Mongo multi-collection transaction is assumed: if a delete fails, repeat this
-     * idempotent operation after fixing the error; the Order is deleted last.
+     * TEST-ONLY Delete All delegates to the same guarded cascade as production
+     * Order removal. This prevents Report or Shipping Day records being left out
+     * of the test cleanup when the workflow evolves.
      */
     public synchronized Map<String, Object> purge(String buyer, String orderId, String confirmation) {
         assertAvailable(buyer, orderId);
         OrderDocument entity = template.findById(orderId, OrderDocument.class);
-        String required = "DELETE " + entity.getOrderName();
-        if (!required.equals(confirmation)) {
-            throw new IllegalArgumentException("Type '" + required + "' to confirm deletion of this Order and all related data.");
-        }
-        // Never remove active PDA reservations while the physical device may still be scanning.
-        if (template.exists(captureQuery(orderId).addCriteria(Criteria.where("stopped").is(false)), RfidPdaCapture.class)) {
-            throw new IllegalStateException("Stop active RFID PDA capture(s) before deleting this Order.");
-        }
-        audit.log(RequestActor.current(), "TEST_PURGE_STARTED", "LULULEMON_ORDER", orderId,
-                "Test-only hard purge requested for Order " + entity.getOrderName(), null, null);
-        Map<String, Long> counts = new LinkedHashMap<>();
-        for (Target target : targets(orderId)) {
-            if (template.collectionExists(target.collection())) {
-                counts.put(target.label(), template.remove(target.query(), target.collection()).getDeletedCount());
-            } else {
-                counts.put(target.label(), 0L);
-            }
-        }
-        // Parent Order last, so a partial error retains the Order for an idempotent retry.
-        Query orderQuery = Query.query(Criteria.where("_id").is(orderId)
-                .and("buyerCode").is(AppConstants.Buyer.LULULEMON));
-        counts.put("Order", template.remove(orderQuery, OrderDocument.class).getDeletedCount());
+        // The shared deletion enforces Admin, the exact typed confirmation,
+        // active PDA + PO identity protection, the deletion fence and parent-last order.
+        Map<String, Long> deleted = cascadeDelete.deleteAll(orderId, entity.getOrderName(), confirmation);
         audit.logForFactory(RequestActor.current(), "TEST_PURGE_FINISHED", "LULULEMON_ORDER", orderId,
-                "Test-only cleanup of Order " + entity.getOrderName() + ": " + counts,
+                "Test-only cleanup of Order " + entity.getOrderName() + ": " + deleted,
                 AppConstants.Buyer.LULULEMON, entity.getFactoryCode());
-        return Map.of("orderId", orderId, "orderName", entity.getOrderName(), "deleted", counts);
-    }
-
-    private record Target(String label, String collection, Query query) { }
-
-    private java.util.List<Target> targets(String orderId) {
-        java.util.List<Target> targets = new java.util.ArrayList<>();
-        add(targets, "ALL_BP import batches", PackingImportBatch.class, ownerQuery(orderId));
-        add(targets, "RFID sessions", RfidScanSession.class, ownerQuery(orderId));
-        add(targets, "PDA captures", RfidPdaCapture.class, captureQuery(orderId));
-        add(targets, "PO Pick claims", PoPickClaim.class, ownerQuery(orderId));
-        add(targets, "PO Pick history", PoPickEvent.class, buyerKeyQuery(orderId));
-        add(targets, "Checking history", CartonCheckingRecord.class, ownerQuery(orderId));
-        // Retired print requests were stored in a buyer+Order-scoped collection.
-        targets.add(new Target("Legacy Print handoffs", "print_handoffs", ownerQuery(orderId)));
-        add(targets, "Completed carton history", CartonProcessingHistory.class, ownerQuery(orderId));
-        add(targets, "Weight results", WeighingResult.class, ownerQuery(orderId));
-        add(targets, "Weighing assignments", WeighingOrder.class, ownerQuery(orderId));
-        add(targets, "Weight profiles", WeightProfile.class, ownerQuery(orderId));
-        add(targets, "Shipping schedules", ShippingSchedule.class, ownerQuery(orderId));
-        add(targets, "Scan history", ScanEvent.class, ownerQuery(orderId));
-        add(targets, "Carton items", CartonItem.class, ownerQuery(orderId));
-        add(targets, "Cartons", Carton.class, ownerQuery(orderId));
-        add(targets, "Purchase Orders", PurchaseOrder.class, ownerQuery(orderId));
-        targets.add(new Target("Shipments", AppConstants.Collection.SHIPMENTS, ownerQuery(orderId)));
-        targets.add(new Target("Packing list lines", AppConstants.Collection.PACKING_LIST_LINES, ownerQuery(orderId)));
-        targets.add(new Target("Packing allocation lines", AppConstants.Collection.PACKING_ALLOCATION_LINES, ownerQuery(orderId)));
-        targets.add(new Target("Carton operations", AppConstants.Collection.CARTON_OPERATIONS, ownerQuery(orderId)));
-        targets.add(new Target("PO identity registry", AppConstants.Collection.PO_IDENTITY_REGISTRY, ownerQuery(orderId)));
-        return targets;
-    }
-
-    private void add(java.util.List<Target> targets, String label, Class<?> type, Query query) {
-        targets.add(new Target(label, template.getCollectionName(type), query));
-    }
-
-    private Query ownerQuery(String orderId) {
-        // buyerCode remains supported for legacy documents saved before buyer_key existed.
-        return Query.query(Criteria.where("buyerCode").is(AppConstants.Buyer.LULULEMON)
-                .and("orderId").is(orderId));
-    }
-
-    private Query buyerKeyQuery(String orderId) {
-        return Query.query(Criteria.where("buyer_key").is(AppConstants.Buyer.LULULEMON)
-                .and("orderId").is(orderId));
-    }
-
-    private Query captureQuery(String orderId) {
-        return Query.query(Criteria.where("buyer_key").is(AppConstants.Buyer.LULULEMON)
-                .and("order").is(orderId));
+        return Map.of("orderId", orderId, "orderName", entity.getOrderName(), "deleted", deleted);
     }
 }

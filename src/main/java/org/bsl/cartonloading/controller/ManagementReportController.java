@@ -16,8 +16,8 @@ public class ManagementReportController {
     public ManagementReportController(ManagementReportFacade reports) { this.reports = reports; }
 
     private ManagementReportService.Filters filters(LocalDate from, LocalDate to, String factory,
-                                                     String shippingDate, String orderId, String status) {
-        return new ManagementReportService.Filters(from, to, factory, shippingDate, orderId, status);
+                                                     String shippingDate, String orderId, String status, String dateBasis) {
+        return new ManagementReportService.Filters(from, to, factory, shippingDate, orderId, status, dateBasis);
     }
 
     @GetMapping
@@ -29,9 +29,10 @@ public class ManagementReportController {
             @RequestParam(required = false) String shippingDate,
             @RequestParam(required = false) String orderId,
             @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "ALL") String dateBasis,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size) {
-        return reports.forBuyer(null, impl -> impl.report(filters(from, to, factory, shippingDate, orderId, status), page, size));
+        return reports.forBuyer(null, impl -> impl.report(filters(from, to, factory, shippingDate, orderId, status, dateBasis), page, size));
     }
 
     @GetMapping("/dashboard-summary")
@@ -42,8 +43,9 @@ public class ManagementReportController {
             @RequestParam(required = false) String factory,
             @RequestParam(required = false) String shippingDate,
             @RequestParam(required = false) String orderId,
-            @RequestParam(required = false) String status) {
-        return reports.forBuyer(null, impl -> impl.dashboardSummary(filters(from, to, factory, shippingDate, orderId, status)));
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "ALL") String dateBasis) {
+        return reports.forBuyer(null, impl -> impl.dashboardSummary(filters(from, to, factory, shippingDate, orderId, status, dateBasis)));
     }
 
     @GetMapping("/dashboard-options")
@@ -51,8 +53,9 @@ public class ManagementReportController {
     public ManagementReportService.Options dashboardOptions(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestParam(required = false) String factory) {
-        return reports.forBuyer(null, impl -> impl.dashboardOptions(filters(from, to, factory, "", "", "")));
+            @RequestParam(required = false) String factory,
+            @RequestParam(defaultValue = "ALL") String dateBasis) {
+        return reports.forBuyer(null, impl -> impl.dashboardOptions(filters(from, to, factory, "", "", "", dateBasis)));
     }
 
     @GetMapping("/pos/{poId}")
@@ -61,13 +64,14 @@ public class ManagementReportController {
             @PathVariable String poId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestParam String shippingDate,
+            @RequestParam(required = false, defaultValue = "") String shippingDate,
             @RequestParam(required = false) String factory,
             @RequestParam(required = false) String orderId,
             @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "ALL") String dateBasis,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size) {
-        return reports.forBuyer(null, impl -> impl.poDetail(filters(from, to, factory, shippingDate, orderId, status), poId, shippingDate, page, size));
+        return reports.forBuyer(null, impl -> impl.poDetail(filters(from, to, factory, shippingDate, orderId, status, dateBasis), poId, shippingDate, page, size));
     }
 
     @GetMapping("/pos/{poId}/cartons/{cartonId}/history")
@@ -76,11 +80,12 @@ public class ManagementReportController {
             @PathVariable String poId, @PathVariable String cartonId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestParam String shippingDate,
+            @RequestParam(required = false, defaultValue = "") String shippingDate,
             @RequestParam(required = false) String factory,
             @RequestParam(required = false) String orderId,
-            @RequestParam(required = false) String status) {
-        return reports.forBuyer(null, impl -> impl.cartonHistory(filters(from, to, factory, shippingDate, orderId, status),
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "ALL") String dateBasis) {
+        return reports.forBuyer(null, impl -> impl.cartonHistory(filters(from, to, factory, shippingDate, orderId, status, dateBasis),
                 poId, shippingDate, cartonId));
     }
 
@@ -89,13 +94,14 @@ public class ManagementReportController {
     public ResponseEntity<byte[]> exportPo(@PathVariable String poId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestParam String shippingDate,
+            @RequestParam(required = false, defaultValue = "") String shippingDate,
             @RequestParam(required = false) String factory,
             @RequestParam(required = false) String orderId,
-            @RequestParam(required = false) String status) throws IOException {
-        byte[] bytes = reports.forBuyer(null, impl -> impl.exportPo(filters(from, to, factory, shippingDate, orderId, status), poId, shippingDate));
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "ALL") String dateBasis) throws IOException {
+        byte[] bytes = reports.forBuyer(null, impl -> impl.exportPo(filters(from, to, factory, shippingDate, orderId, status, dateBasis), poId, shippingDate));
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=PO_" + poId + "_Carton_Details_" + shippingDate + ".xlsx")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=PO_" + poId + "_Carton_Details_" + (shippingDate.isBlank() ? "UNSCHEDULED" : shippingDate) + ".xlsx")
                 .body(bytes);
     }
 
@@ -107,8 +113,9 @@ public class ManagementReportController {
             @RequestParam(required = false) String factory,
             @RequestParam(required = false) String shippingDate,
             @RequestParam(required = false) String orderId,
-            @RequestParam(required = false) String status) throws IOException {
-        byte[] bytes = reports.forBuyer(null, impl -> impl.export(filters(from, to, factory, shippingDate, orderId, status)));
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "ALL") String dateBasis) throws IOException {
+        byte[] bytes = reports.forBuyer(null, impl -> impl.export(filters(from, to, factory, shippingDate, orderId, status, dateBasis)));
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=Shipping_Order_Report_" + from + "_" + to + ".xlsx")
                 .body(bytes);

@@ -27,6 +27,15 @@ public class CartonProcessingController {
         return service.forBuyer(buyer, impl -> impl.summary(buyer, factoryCode, orderId, poId));
     }
 
+    /** END is scoped to the selected Order/PO and audits the final PO outcome. */
+    @PostMapping("/end")
+    @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.isAdmin())")
+    public CartonProcessingService.EndPoResult endPo(@PathVariable String buyer,
+                                                      @RequestParam String orderId,
+                                                      @RequestParam String poId) {
+        return service.forBuyer(buyer, impl -> impl.endPo(buyer, orderId, poId));
+    }
+
     @GetMapping("/sscc/check")
     @PreAuthorize("@accessControl.canAccessBuyer(#buyer) and (@accessControl.canWeightCheck() or @accessControl.isAdmin())")
     public CartonProcessingService.SsccPrecheck checkSscc(

@@ -46,7 +46,7 @@ import java.util.stream.Collectors;
  */
 @Service
 public class PoShippingPlanService {
-    private static final String SUBMISSION_COLLECTION = "po_shipping_day_submissions";
+    private static final String SUBMISSION_COLLECTION = AppConstants.Collection.PO_SHIPPING_DAY_SUBMISSIONS;
     private static final ZoneId SHIPPING_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final String SUBMITTED = "SUBMITTED";
     private static final String REOPENED = "REOPENED";
